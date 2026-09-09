@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dspm-memory"
+version = "0.1.0"
+description = "Training-free long-context memory compression for LLM conversations. Guarantees 100% critical-constraint retention at any budget."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "Dhruv Dubey", email = "dhruvdubey1311@gmail.com" }
+]
+license = { text = "MIT" }
+keywords = ["llm", "memory", "compression", "context-window", "agents", "conversation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "tiktoken>=0.5.0",
+]
+
+[project.optional-dependencies]
+semantic = [
+  "sentence-transformers>=2.2.0",
+]
+
+[project.urls]
+Repository = "https://github.com/zatchbell1311-wq/Kernl"
+Issues = "https://github.com/zatchbell1311-wq/Kernl/issues"
+# Paper = "https://arxiv.org/abs/YOUR_ARXIV_ID"   ← uncomment and fill in when you get your arXiv ID
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
