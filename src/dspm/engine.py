@@ -123,28 +123,62 @@ class DSPMEngine:
                 seen.add(k)
         return out
 
+    # FIXED (v0.1.1): was mangling EVERY non-critical payload into a
+    # "+word word -word" fragment unconditionally. Now only rewrites a
+    # payload as a word-level diff when it shares a slot_key with an
+    # earlier patch AND the diff is actually shorter than the original.
     def _delta_encoding(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
-        """T3: rewrite non-critical patches sharing a slot_key as simple word-level diff summaries."""
-        result = []
-        for idx, p in enumerate(patches):
-            if p.is_critical:
-                result.append(p)
+        """T3: rewrite non-critical patches sharing a slot_key as word-level diffs, only when shorter."""
+        slot_base = {}
+        out = []
+        for p in sorted(patches, key=lambda x: x.turn_index):
+            if p.is_critical or p.slot_key not in slot_base:
+                slot_base[p.slot_key] = p
+                out.append(p)
                 continue
-            # convert to simple diff where payload changes are marked
-            # if enough gain. This is kept lightweight and deterministic.
-            if result:
-                # heuristic: add a diff-style marker for later similarity
-                words = p.payload.split()
-                if len(words) >= 3:
-                    p.payload = "+" + " ".join(words[:2]) + " -" + " ".join(words[-1:])
-                    p.is_delta = True
-                    p.recount()
-            result.append(p)
-        return result
+            base = slot_base[p.slot_key]
+            new_words = set(p.payload.lower().split())
+            base_words = set(base.payload.lower().split())
+            added = new_words - base_words
+            removed = base_words - new_words
+            parts = []
+            if added:
+                parts.append("+[" + " ".join(sorted(added)) + "]")
+            if removed:
+                parts.append("-[" + " ".join(sorted(removed)) + "]")
+            delta = " ".join(parts)
+            if delta and count_tokens(delta) < p.token_cost:
+                p.payload = delta
+                p.is_delta = True
+                p.recount()
+            slot_base[p.slot_key] = p
+            out.append(p)
+        return out
 
+    # FIXED (v0.1.1): the old one-liner dropped critical patches that
+    # had dependencies — violating the package's core guarantee.
+    # Criticals are now ALWAYS kept; only intermediate non-critical
+    # nodes (having both parents and children) are pruned.
     def _causal_pruning(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
-        """T4: remove intermediate non-critical nodes from dependency graph."""
-        return [p for p in patches if (not p.is_critical) or len(p.dependencies) == 0]
+        """T4: remove intermediate non-critical nodes from the dependency graph.
+        Critical patches are ALWAYS kept (retention guarantee)."""
+        kept_ids = {p.patch_id for p in patches}
+        children = {}
+        for p in patches:
+            for d in p.dependencies:
+                if d in kept_ids:
+                    children.setdefault(d, []).append(p.patch_id)
+        out = []
+        for p in patches:
+            if p.is_critical:
+                out.append(p)
+                continue
+            has_children = bool(children.get(p.patch_id))
+            has_parents = any(d in kept_ids for d in p.dependencies)
+            if has_children and has_parents:
+                continue  # intermediate node → prune
+            out.append(p)
+        return out
 
     def _score_utility(self, patches: Sequence[SemanticPatch], query: str) -> List[SemanticPatch]:
         """T5: utility scoring using alignment, dependency centrality, recency, and cost penalties."""
@@ -197,13 +231,17 @@ class DSPMEngine:
             return 0.0
         return float(np.dot(a, b) / denom)
 
+    # ADJUSTED (v0.1.1): passes `selected` into _fit_criticals so any
+    # (last-resort) critical drop is reflected in the selected list,
+    # and reports critical_retained AFTER fitting.
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
         criticals = sorted([p for p in work if p.is_critical], key=lambda p: p.utility, reverse=True)
         selected = list(criticals)
         # Fit criticals within budget share by trimming payload words.
-        trim_count = self._fit_criticals(criticals)
-        diagnostics = {"critical_retained": len(criticals), "trimmed_critical_words": trim_count}
+        trim_count = self._fit_criticals(selected)
+        critical_retained = len([p for p in selected if p.is_critical])
+        diagnostics = {"critical_retained": critical_retained, "trimmed_critical_words": trim_count}
         # fill with non-critical using utility-per-token ratio
         non_criticals = sorted([p for p in work if not p.is_critical], key=lambda p: (p.utility / max(1, p.token_cost)), reverse=True)
         # enforce budget by token total
@@ -213,41 +251,64 @@ class DSPMEngine:
                 selected_total.append(p)
         return selected_total, diagnostics
 
-    def _fit_criticals(self, criticals: Sequence[SemanticPatch]) -> int:
-        """Trim critical patches to fit within the reserved critical token budget."""
-        # Simple implementation: clamp word lengths and protect critical types.
-        # The reference design asks for proportional trimming and numeric-first order.
+    # FIXED (v0.1.1): was a naive "first 12 words" clamp that could cut
+    # numbers off the END of a payload. Now implements the paper's
+    # proportional fit: every critical gets an equal word-share of the
+    # critical budget, trimmed numeric-first; a critical is dropped only
+    # when every critical is already at the 2-word floor.
+    def _fit_criticals(self, criticals: List[SemanticPatch]) -> int:
+        """Proportionally fit critical patches into the critical token budget."""
+        if not criticals:
+            return 0
+        limit = max(8, int(self.budget * CRITICAL_SHARE))
+        n = len(criticals)
+        # tokens per critical -> word allowance (tag ~4 tok; ~1.4 tok/word)
+        per_patch_words = max(2, int((limit / n - 4) / 1.4))
         trimmed = 0
+        # pass 1 — uniform proportional trim, numeric-first
         for p in criticals:
-            words = p.payload.split()
-            max_len = min(12, len(words))
-            if len(words) > max_len:
-                p.payload = " ".join(words[:max_len])
-                trimmed += len(words) - max_len
-                p.recount()
+            before = len(p.payload.split())
+            p.payload = self._trim_numeric_first(p.payload, per_patch_words)
+            p.recount()
+            trimmed += before - len(p.payload.split())
+        # pass 2 — while over limit, trim the critical with the MOST words;
+        # drop only when every critical is already at the <=2-word floor
+        while criticals and sum(p.token_cost for p in criticals) > limit:
+            trimmable = [q for q in criticals if len(q.payload.split()) > 2]
+            if trimmable:
+                tgt = max(trimmable, key=lambda q: len(q.payload.split()))
+                tgt.payload = self._trim_numeric_first(
+                    tgt.payload, len(tgt.payload.split()) - 1)
+                tgt.recount()
+                trimmed += 1
+            else:
+                worst = min(criticals, key=lambda q: q.utility)
+                criticals.remove(worst)
         return trimmed
 
+    # FIXED (v0.1.1): the sort direction was INVERTED (it kept the
+    # lowest-weight words). Also was dead code — now actually used by
+    # _fit_criticals. Keeps numbers/units/acronyms/proper-nouns longest,
+    # preserving original word order in the output.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
-        """Static helper described in the prompt: preserve numeric/unit/proper-noun ordering while trimming."""
+        """Trim payload to max_words; numbers/units/acronyms/proper-nouns survive longest."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
-        # deterministic order by priority weights
-        weighted = []
-        for i, w in enumerate(words):
-            lower = w.lower()
+
+        def weight(i: int, w: str):
+            s = 0
             if re.search(r"\d", w):
-                weight = 2
-            elif any(x in lower for x in ['kb', 'mb', 'ms', 'api', 'id', 'url']):
-                weight = 1
-            elif w[:1].isupper():
-                weight = 1
-            else:
-                weight = 0
-            weighted.append((weight, i, w))
-        weighted.sort(key=lambda x: (x[0], x[1]), reverse=False)
-        keep = [x[2] for x in weighted[:max_words]]
-        return " ".join(keep)
+                s += 2   # numbers, versions, thresholds
+            if "%" in w or w.isupper():
+                s += 1   # units, acronyms
+            if w[:1].isupper():
+                s += 1   # proper nouns (tools, systems)
+            return (s, -i)  # ties → keep earlier word
+
+        ranked = sorted(range(len(words)),
+                        key=lambda i: weight(i, words[i]), reverse=True)[:max_words]
+        return " ".join(words[i] for i in sorted(ranked))
 
     def _adaptive_budgeting(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T7: allocate per-type budgets using the EMA-like query type signal."""
@@ -260,7 +321,6 @@ class DSPMEngine:
     def reset_ema(self) -> None:
         """Reset the EMA query signal state stored in the engine."""
         self.ema_query = {t: 0.0 for t in PATCH_TYPES}
-
 
     def _sorted_count(self, patches):
         return len(patches)
