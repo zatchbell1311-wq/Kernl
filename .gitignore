@@ -8,3 +8,5 @@ build/
 .env
 .DS_Store
 memory.json
+memory.json
+.pytest_tmp/

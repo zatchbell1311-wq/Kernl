@@ -59,6 +59,20 @@ def _has_revision_marker(text: str) -> bool:
     return bool(_REVISION_MARKERS & {w.lower() for w in re.findall(r"\w+", text)})
 
 
+# v0.1.4: topic anchor for terse-revision matching (rule a2). Short patches
+# like "deadline Oct 20" cannot reach 3 shared content words, so rule (a)
+# never fires for them. The first meaningful topic word serves as the
+# anchor instead. Revision markers themselves are excluded from the anchor
+# so "updated Stripe X" and "updated deadline Y" never collide.
+def _slot_head(text: str) -> str:
+    """First meaningful topic word: >=3 chars, not a stopword, not a revision
+    marker. Empty string if none found."""
+    for w in re.findall(r"\w+", text.lower()):
+        if len(w) >= 3 and w not in _STOPWORDS and w not in _REVISION_MARKERS:
+            return _normalize(w)
+    return ""
+
+
 class DSPMMemory:
     """Main user-facing memory object for DSPM.
 
@@ -99,6 +113,14 @@ class DSPMMemory:
     #       (the revision-verb requirement spares complementary facts like
     #       "refresh tokens rotate every 30 days" vs "access tokens 15 min,
     #       refresh tokens 30 days", which share 4 words but revise nothing)
+    #   (a2) same type + same topic anchor + revision verb + CHANGED numbers
+    #       (v0.1.4: terse patches such as "deadline Oct 20" cannot reach 3
+    #       shared words, so rule (a) never fires for them. Real extractions
+    #       produce patches this short — e.g. "z-score > 3" — so revisions of
+    #       terse values were leaking through. The anchor excludes marker
+    #       words, so complementary facts with different topics never
+    #       collide; the changed-numbers requirement means "updated" alone
+    #       with the same value falls through to rule (b) instead)
     #   (b) same type + >=4 shared words + IDENTICAL number sets
     #       (same fact restated — collapses duplicates, spares pairs whose
     #       values genuinely differ)
@@ -121,6 +143,7 @@ class DSPMMemory:
             new_words = _content_words(patch.payload)
             new_nums = _numbers(patch.payload)
             marker = _has_revision_marker(patch.payload)
+            new_head = _slot_head(patch.payload)
             stale = []
             for existing in self.patches:
                 if not existing.is_critical:
@@ -131,7 +154,11 @@ class DSPMMemory:
                 same_type = existing.patch_type == patch.patch_type
                 if same_type:
                     if marker and len(shared) >= 3:
-                        stale.append(existing)          # (a) revision
+                        stale.append(existing)          # (a) revision — rich overlap
+                        continue
+                    if marker and new_head and new_head == _slot_head(existing.payload) \
+                            and new_nums != _numbers(existing.payload):
+                        stale.append(existing)          # (a2) terse revision
                         continue
                     if len(shared) >= 4 and new_nums and new_nums == _numbers(existing.payload):
                         stale.append(existing)          # (b) same-value restatement
