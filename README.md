@@ -155,7 +155,7 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 **DSPM: A Critical-Retention Approach to Long-Context Memory Compression for LLM Conversations**  
 Dhruv Dubey, 2026  
-arXiv link coming soon
+[arXiv:2409.XXXXX](https://arxiv.org/abs/2409.XXXXX)
 
 ---
 
@@ -163,8 +163,10 @@ arXiv link coming soon
 
 | Version | Changes |
 |---------|---------|
-| 0.1.1 | Fixed T4 critical-drop bug; T3 payload mangling; extractor schema mismatch; numeric-first trim direction |
-| 0.1.0 | Initial release |
+| 0.1.3 | Revision supersession fix: stale same-type criticals now removed when superseded (verified live — a webhook timeout revised 30s→10s collapsed from 4 contradictory entries to a single correct one). Robust normalized content-word matching. All stale matches removed. Same-value restatement collapse. |
+| 0.1.2 | Fixed critical-patch ID collisions (CRR 36% → 100% in 18-turn live test). Budget enforced on joined context string. Cross-type revision supersession. |
+| 0.1.1 | Fixed T4 dropping criticals with dependencies. Fixed T3 payload mangling. Fixed extractor schema mismatch. Corrected inverted trim sort. Deterministic patch IDs. |
+| 0.1.0 | Initial release. |
 
 ---
 
