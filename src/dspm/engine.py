@@ -40,12 +40,7 @@ class DSPMEngine:
         self._embedder = None
 
     def compress(self, patches: Sequence[SemanticPatch], query: str, turn_index: int) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
-        """Compress a list of SemanticPatch objects into selected patches plus diagnostics.
-
-        The method deep-copies patches then applies the T1-T7 pipeline. It
-        returns a selected patch list together with a diagnostics dictionary
-        representing the stage-level counts and token information.
-        """
+        """Compress a list of SemanticPatch objects into selected patches plus diagnostics."""
         work = copy.deepcopy(list(patches))
         diagnostics = {
             "stages": [],
@@ -54,79 +49,69 @@ class DSPMEngine:
             "critical_retained": 0,
         }
 
-        # T1 fingerprint deduplication
         work = self._dedup_fingerprints(work)
         diagnostics["stages"].append("T1")
-
-        # T2 slot fusion
         work = self._slot_fusion(work)
         diagnostics["stages"].append("T2")
-
-        # T3 delta encoding
         work = self._delta_encoding(work)
         diagnostics["stages"].append("T3")
-
-        # T4 causal pruning
         work = self._causal_pruning(work)
         diagnostics["stages"].append("T4")
-
-        # T5 utility scoring
         work = self._score_utility(work, query)
         diagnostics["stages"].append("T5")
-
-        # T6 critical guarantee and shadow selection
         selected, selected_diagnostics = self._shadow_selection(work)
         diagnostics.update(selected_diagnostics)
         diagnostics["stages"].append("T6")
-
-        # T7 adaptive budgeting
         selected = self._adaptive_budgeting(selected)
         diagnostics["stages"].append("T7")
 
-        # ensure token bound
         return selected, diagnostics
 
+    # FIXED (v0.1.2): criticals were keyed by "critical-{patch_id}" — when an
+    # LLM reuses patch_ids across turns, dict assignment silently OVERWRITES
+    # critical patches (observed: 19 criticals -> 7, CRR 36%). Criticals now
+    # pass through T1 untouched; duplicate suppression among criticals is
+    # T0's job (write-time merge in memory.py).
     def _dedup_fingerprints(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
-        """T1: remove duplicate non-critical patches, keeping the newest non-critical version."""
+        """T1: deduplicate NON-CRITICAL patches by fingerprint; criticals pass through."""
         keep = {}
+        crits = []
         for p in patches:
-            key = p.fingerprint
             if p.is_critical:
-                keep["critical-" + p.patch_id] = p
+                crits.append(p)
                 continue
-            if key in keep:
-                old = keep[key]
-                if p.turn_index >= old.turn_index:
-                    keep[key] = p
+            if p.fingerprint in keep:
+                if p.turn_index >= keep[p.fingerprint].turn_index:
+                    keep[p.fingerprint] = p
             else:
-                keep[key] = p
-        return list(keep.values())
+                keep[p.fingerprint] = p
+        return crits + list(keep.values())
 
+    # FIXED (v0.1.2): criticals were grouped under groups[p.patch_id] —
+    # colliding LLM patch_ids overwrote each other here too. Criticals are
+    # now never fused (keyed by object identity).
     def _slot_fusion(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T2: fuse duplicate slot keys for non-critical patches by highest utility and turn index."""
         groups = {}
         for p in patches:
             if p.is_critical:
-                groups.setdefault(p.patch_id, p)
+                groups[id(p)] = p   # v0.1.2: never fuse criticals
                 continue
             groups.setdefault(p.slot_key, p)
             if p.slot_key in groups and groups[p.slot_key] != p:
                 current = groups[p.slot_key]
                 if (p.utility, p.turn_index) >= (current.utility, current.turn_index):
                     groups[p.slot_key] = p
-        # return list of unique selected fused items
         out = []
         seen = set()
         for k, p in groups.items():
-            if isinstance(p, SemanticPatch) and k not in seen:
+            if isinstance(p, SemanticPatch) and id(p) not in seen:
                 out.append(p)
-                seen.add(k)
+                seen.add(id(p))
         return out
 
-    # FIXED (v0.1.1): was mangling EVERY non-critical payload into a
-    # "+word word -word" fragment unconditionally. Now only rewrites a
-    # payload as a word-level diff when it shares a slot_key with an
-    # earlier patch AND the diff is actually shorter than the original.
+    # FIXED (v0.1.1): only rewrite as a word-level diff when it shares a
+    # slot_key with an earlier patch AND the diff is actually shorter.
     def _delta_encoding(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T3: rewrite non-critical patches sharing a slot_key as word-level diffs, only when shorter."""
         slot_base = {}
@@ -155,13 +140,10 @@ class DSPMEngine:
             out.append(p)
         return out
 
-    # FIXED (v0.1.1): the old one-liner dropped critical patches that
-    # had dependencies — violating the package's core guarantee.
-    # Criticals are now ALWAYS kept; only intermediate non-critical
-    # nodes (having both parents and children) are pruned.
+    # FIXED (v0.1.1): criticals are ALWAYS kept; only intermediate
+    # non-critical nodes (both parents and children) are pruned.
     def _causal_pruning(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
-        """T4: remove intermediate non-critical nodes from the dependency graph.
-        Critical patches are ALWAYS kept (retention guarantee)."""
+        """T4: remove intermediate non-critical nodes from the dependency graph."""
         kept_ids = {p.patch_id for p in patches}
         children = {}
         for p in patches:
@@ -176,13 +158,12 @@ class DSPMEngine:
             has_children = bool(children.get(p.patch_id))
             has_parents = any(d in kept_ids for d in p.dependencies)
             if has_children and has_parents:
-                continue  # intermediate node → prune
+                continue
             out.append(p)
         return out
 
     def _score_utility(self, patches: Sequence[SemanticPatch], query: str) -> List[SemanticPatch]:
         """T5: utility scoring using alignment, dependency centrality, recency, and cost penalties."""
-        # simple deterministic scoring per patch
         type_boost = {
             'constraint': 0.20,
             'decision': 0.18,
@@ -213,7 +194,6 @@ class DSPMEngine:
             if self._embedder is None:
                 from sentence_transformers import SentenceTransformer
                 self._embedder = SentenceTransformer('all-MiniLM-L6-v2')
-            # approximate similarity with fallback to a deterministic lexical overlap
             q = self._embedder.encode(query)
             p = self._embedder.encode(patch.payload)
             try:
@@ -231,38 +211,50 @@ class DSPMEngine:
             return 0.0
         return float(np.dot(a, b) / denom)
 
-    # ADJUSTED (v0.1.1): passes `selected` into _fit_criticals so any
-    # (last-resort) critical drop is reflected in the selected list,
-    # and reports critical_retained AFTER fitting.
+    # FIXED (v0.1.2): the budget is now enforced on the ACTUAL joined
+    # context string. Previously the fit measured sum(per-patch tokens),
+    # which under-counts the newline tokens between patches — the context
+    # could exceed the budget by a few tokens (observed: 104/154/251 at
+    # budgets 100/150/250). A final safety pass now drops non-criticals
+    # first, then trims criticals, and drops a critical only at the
+    # 2-word floor.
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
         criticals = sorted([p for p in work if p.is_critical], key=lambda p: p.utility, reverse=True)
         selected = list(criticals)
-        # Fit criticals within budget share by trimming payload words.
         trim_count = self._fit_criticals(selected)
         critical_retained = len([p for p in selected if p.is_critical])
         diagnostics = {"critical_retained": critical_retained, "trimmed_critical_words": trim_count}
-        # fill with non-critical using utility-per-token ratio
-        non_criticals = sorted([p for p in work if not p.is_critical], key=lambda p: (p.utility / max(1, p.token_cost)), reverse=True)
-        # enforce budget by token total
+        non_criticals = sorted([p for p in work if not p.is_critical],
+                               key=lambda p: (p.utility / max(1, p.token_cost)), reverse=True)
         selected_total = selected
         for p in non_criticals:
             if count_tokens(self.build_context(selected_total + [p])) <= self.budget:
                 selected_total.append(p)
+        # FINAL HARD CAP on the real joined string (newline tokens included)
+        while selected_total and count_tokens(self.build_context(selected_total)) > self.budget:
+            non_crit = [q for q in selected_total if not q.is_critical]
+            if non_crit:
+                selected_total.remove(min(non_crit, key=lambda q: q.utility))
+                continue
+            trimmable = [q for q in selected_total if len(q.payload.split()) > 2]
+            if trimmable:
+                tgt = max(trimmable, key=lambda q: len(q.payload.split()))
+                tgt.payload = self._trim_numeric_first(
+                    tgt.payload, len(tgt.payload.split()) - 1)
+                tgt.recount()
+            else:
+                selected_total.remove(min(selected_total, key=lambda q: q.utility))
         return selected_total, diagnostics
 
-    # FIXED (v0.1.1): was a naive "first 12 words" clamp that could cut
-    # numbers off the END of a payload. Now implements the paper's
-    # proportional fit: every critical gets an equal word-share of the
-    # critical budget, trimmed numeric-first; a critical is dropped only
-    # when every critical is already at the 2-word floor.
+    # FIXED (v0.1.1 proportional fit; v0.1.2: pass-2 now measures the JOINED
+    # critical block, not the per-patch sum, so newline tokens are counted).
     def _fit_criticals(self, criticals: List[SemanticPatch]) -> int:
         """Proportionally fit critical patches into the critical token budget."""
         if not criticals:
             return 0
         limit = max(8, int(self.budget * CRITICAL_SHARE))
         n = len(criticals)
-        # tokens per critical -> word allowance (tag ~4 tok; ~1.4 tok/word)
         per_patch_words = max(2, int((limit / n - 4) / 1.4))
         trimmed = 0
         # pass 1 — uniform proportional trim, numeric-first
@@ -271,9 +263,9 @@ class DSPMEngine:
             p.payload = self._trim_numeric_first(p.payload, per_patch_words)
             p.recount()
             trimmed += before - len(p.payload.split())
-        # pass 2 — while over limit, trim the critical with the MOST words;
-        # drop only when every critical is already at the <=2-word floor
-        while criticals and sum(p.token_cost for p in criticals) > limit:
+        # pass 2 — while the JOINED critical block is over limit, trim the
+        # critical with the MOST words; drop only at the <=2-word floor
+        while criticals and count_tokens(self.build_context(criticals)) > limit:
             trimmable = [q for q in criticals if len(q.payload.split()) > 2]
             if trimmable:
                 tgt = max(trimmable, key=lambda q: len(q.payload.split()))
@@ -286,10 +278,8 @@ class DSPMEngine:
                 criticals.remove(worst)
         return trimmed
 
-    # FIXED (v0.1.1): the sort direction was INVERTED (it kept the
-    # lowest-weight words). Also was dead code — now actually used by
-    # _fit_criticals. Keeps numbers/units/acronyms/proper-nouns longest,
-    # preserving original word order in the output.
+    # FIXED (v0.1.1): sort direction corrected; keeps numbers/units/acronyms/
+    # proper-nouns longest, preserving original word order.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words; numbers/units/acronyms/proper-nouns survive longest."""
         words = payload.split()

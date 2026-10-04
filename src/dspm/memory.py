@@ -1,9 +1,4 @@
-"""User-facing DSPM memory API.
-
-The memory object provides a high-level API for adding conversation turns,
-extracting semantic patches from an LLM-compatible client, storing them,
-compressing them, and returning a context string within a token budget.
-"""
+"""User-facing DSPM memory API."""
 
 from __future__ import annotations
 
@@ -15,6 +10,22 @@ from dspm.config import PATCH_TYPES, CRITICAL_TYPES, DEFAULT_BUDGET, REVISION_OV
 from dspm.engine import DSPMEngine
 from dspm.extractor import extract_turn
 from dspm.patch import SemanticPatch, count_tokens
+
+# v0.1.2: common function words excluded from revision-overlap matching.
+_STOPWORDS = {
+    "the", "a", "an", "to", "from", "for", "of", "in", "on", "at", "by", "as",
+    "and", "or", "with", "must", "be", "is", "are", "was", "were", "will",
+    "shall", "should", "this", "that", "it", "its", "all", "no", "not",
+    "when", "if", "then", "than", "so", "we", "you",
+}
+
+
+def _normalize(word: str) -> str:
+    """Light stemming so 'sessions' matches 'session' and '60s' matches '60'."""
+    w = word.lower()
+    if len(w) > 3 and w.endswith("s"):
+        return w[:-1]
+    return w
 
 
 class DSPMMemory:
@@ -38,11 +49,7 @@ class DSPMMemory:
         self._last_context = ""
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
-        """Add a conversation turn and return the newly extracted patches.
-
-        The method raises ValueError if no LLM client is supplied, because
-        extraction requires an llm_client.chat.completions.create call.
-        """
+        """Add a conversation turn and return the newly extracted patches."""
         if self.llm_client is None:
             raise ValueError("llm_client is required to call add_turn()")
 
@@ -52,19 +59,39 @@ class DSPMMemory:
         self.turns += 1
         return patches
 
+    # FIXED (v0.1.2): a revision is often re-extracted under a DIFFERENT type
+    # (the TTL constraint was revised and came back as a decision). Since
+    # slot_key embeds the type prefix, cross-type matching via slot_key never
+    # fired, and Jaccard was below threshold (0.33 < 0.40), so the stale 60s
+    # constraint survived alongside the 300s decision. Cross-type supersession
+    # now fires when the two payloads share >= 4 content words (stopwords and
+    # simple plurals normalized) — the signature of the same subject restated.
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical revision superseding."""
+        # exact duplicate suppression (same type, same payload)
         for existing in self.patches:
             if existing.patch_type == patch.patch_type and existing.payload == patch.payload:
                 return
-        # critical superseding by overlap threshold
+        # cross-type exact duplicate criticals (same words, different type)
         if patch.is_critical:
             for existing in self.patches:
-                if existing.is_critical and existing.patch_type == patch.patch_type:
-                    overlap = self._jaccard(existing.payload, patch.payload)
-                    if overlap >= REVISION_OVERLAP:
-                        self.patches.remove(existing)
-                        break
+                if existing.is_critical and existing.fingerprint == patch.fingerprint:
+                    return
+        # critical revision supersession
+        if patch.is_critical:
+            for existing in self.patches:
+                if not existing.is_critical:
+                    continue
+                if existing.turn_index > patch.turn_index:
+                    continue  # never let an older patch supersede a newer one
+                same_type = existing.patch_type == patch.patch_type
+                if same_type:
+                    is_revision = self._jaccard(existing.payload, patch.payload) >= REVISION_OVERLAP
+                else:
+                    is_revision = self._content_overlap(existing.payload, patch.payload) >= 4
+                if is_revision:
+                    self.patches.remove(existing)
+                    break
         self.patches.append(patch)
 
     def _jaccard(self, left: str, right: str) -> float:
@@ -74,6 +101,14 @@ class DSPMMemory:
         if not a and not b:
             return 1.0
         return len(a & b) / len(a | b) if (a | b) else 0.0
+
+    def _content_overlap(self, left: str, right: str) -> int:
+        """Count shared non-stopword tokens (with light plural normalization)."""
+        a = {_normalize(w) for w in left.lower().split()
+             if w not in _STOPWORDS and len(w) > 1}
+        b = {_normalize(w) for w in right.lower().split()
+             if w not in _STOPWORDS and len(w) > 1}
+        return len(a & b)
 
     def get_context(self, query: str = "") -> str:
         """Return the compressed context string produced by the DSPM engine."""
@@ -104,7 +139,6 @@ class DSPMMemory:
         raw_tokens = sum(count_tokens(p.to_prompt_str()) for p in self.patches)
         context_tokens = sum(count_tokens(p.to_prompt_str()) for p in self.selected_patches)
         crr = 100 if critical_total == 0 else int((critical_selected / critical_total) * 100)
-        # token reduction rate; a rough deterministic estimate
         trr = 100 - int((context_tokens / max(1, raw_tokens)) * 100) if raw_tokens else 0
         return {
             "turns": self.turns,

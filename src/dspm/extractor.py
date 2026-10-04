@@ -151,7 +151,7 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
             continue
         # FIXED (v0.1.1): deterministic per-turn id (hash() is not stable
         # across processes) — mirrors the Colab pipeline's p{turn}_{i}.
-        patch_id = str(item.get('patch_id') or f"p{turn_index}_{len(patches)}")
+        patch_id = f"p{turn_index}_{len(patches)}"
 
         # FIXED (v0.1.1): only pass the fields the LLM should control.
         # Fingerprint/slot_key/token_cost were previously taken from the
