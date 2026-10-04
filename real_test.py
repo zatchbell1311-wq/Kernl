@@ -4,7 +4,8 @@ actually matters. 6 turns, then compression at 3 budgets.
 """
 import os
 from typing import List
-import os`nfrom openai import OpenAI
+import os
+from openai import OpenAI
 from dspm import DSPMMemory
 
 llm = OpenAI(

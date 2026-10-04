@@ -11,6 +11,7 @@ from dspm.config import PATCH_TYPES, CRITICAL_TYPES, DEFAULT_BUDGET, REVISION_OV
 from dspm.engine import DSPMEngine
 from dspm.extractor import extract_turn
 from dspm.patch import SemanticPatch, count_tokens
+from dspm.persistence import save_memory, load_memory
 
 # v0.1.3: common function words excluded from revision matching.
 _STOPWORDS = {
@@ -203,3 +204,29 @@ class DSPMMemory:
         self.turns = 0
         self._last_context = ""
         self.engine.reset_ema()
+
+    # ── v0.1.4: persistence — cross-session, cross-chat long-term memory ──
+
+    def save(self, path: str) -> int:
+        """Persist the memory notebook to a JSON file (atomic write).
+
+        Call when a chat ends. Returns the number of patches saved.
+
+        Example:
+            memory.save("user_dhruv.json")
+        """
+        return save_memory(self, path)
+
+    def load(self, path: str) -> int:
+        """Load a notebook from a JSON file into this memory.
+
+        Call when a chat starts. Merge semantics: saved patches enter
+        through the same duplicate-suppression and supersession rules as
+        live turns, so a revision saved earlier supersedes stale values.
+        Returns the number of patches newly loaded (0 if the file is
+        missing or empty).
+
+        Example:
+            memory.load("user_dhruv.json")   # Chat 2 now recalls Chat 1
+        """
+        return load_memory(self, path)
