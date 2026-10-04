@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from dspm.config import PATCH_TYPES, CRITICAL_TYPES, DEFAULT_BUDGET, REVISION_OVERLAP
@@ -11,7 +12,7 @@ from dspm.engine import DSPMEngine
 from dspm.extractor import extract_turn
 from dspm.patch import SemanticPatch, count_tokens
 
-# v0.1.2: common function words excluded from revision-overlap matching.
+# v0.1.3: common function words excluded from revision matching.
 _STOPWORDS = {
     "the", "a", "an", "to", "from", "for", "of", "in", "on", "at", "by", "as",
     "and", "or", "with", "must", "be", "is", "are", "was", "were", "will",
@@ -19,13 +20,42 @@ _STOPWORDS = {
     "when", "if", "then", "than", "so", "we", "you",
 }
 
+# v0.1.3: verbs that signal a payload REVISES an earlier value. Revisions in
+# real conversations announce themselves; complementary facts do not.
+_REVISION_MARKERS = {
+    "update", "updated", "change", "changed", "revise", "revised",
+    "supersede", "superseded", "replace", "replaced", "instead",
+    "raise", "raised", "lower", "lowered", "increase", "increased",
+    "decrease", "decreased", "reduce", "reduced", "switch", "switched",
+    "migrate", "migrated", "revert", "reverted",
+}
+
 
 def _normalize(word: str) -> str:
-    """Light stemming so 'sessions' matches 'session' and '60s' matches '60'."""
+    """Lowercase + light stemming so 'sessions'~'session' and '30s'~'30' match."""
     w = word.lower()
     if len(w) > 3 and w.endswith("s"):
         return w[:-1]
+    if len(w) > 2 and w.endswith("s") and any(c.isdigit() for c in w[:-1]):
+        return w[:-1]          # "30s" -> "30"
     return w
+
+
+def _content_words(text: str) -> set:
+    """Robust content-word set: \\w+ tokens, stopwords removed, plurals normalized.
+    Unlike raw whitespace Jaccard, this survives 'seconds;' vs 'seconds' and
+    '30-second' vs '30'."""
+    return {_normalize(w) for w in re.findall(r"\w+", text.lower())
+            if w not in _STOPWORDS and len(w) > 1}
+
+
+def _numbers(text: str) -> frozenset:
+    """All numeric values in a payload (used for same-value collapse)."""
+    return frozenset(re.findall(r"\d+(?:\.\d+)?", text))
+
+
+def _has_revision_marker(text: str) -> bool:
+    return bool(_REVISION_MARKERS & {w.lower() for w in re.findall(r"\w+", text)})
 
 
 class DSPMMemory:
@@ -59,15 +89,23 @@ class DSPMMemory:
         self.turns += 1
         return patches
 
-    # FIXED (v0.1.2): a revision is often re-extracted under a DIFFERENT type
-    # (the TTL constraint was revised and came back as a decision). Since
-    # slot_key embeds the type prefix, cross-type matching via slot_key never
-    # fired, and Jaccard was below threshold (0.33 < 0.40), so the stale 60s
-    # constraint survived alongside the 300s decision. Cross-type supersession
-    # now fires when the two payloads share >= 4 content words (stopwords and
-    # simple plurals normalized) — the signature of the same subject restated.
+    # FIXED (v0.1.3): same-type revisions phrased differently slipped through
+    # (raw-token Jaccard defeated by "seconds;" vs "seconds" and "30-second"
+    # vs "30" — observed live: four webhook-timeout decisions, two saying 30s
+    # and two saying 10s, all surviving in one context). Supersession now
+    # uses robust normalized content words with three rules:
+    #   (a) same type + >=3 shared words + revision verb in the new payload
+    #       (the revision-verb requirement spares complementary facts like
+    #       "refresh tokens rotate every 30 days" vs "access tokens 15 min,
+    #       refresh tokens 30 days", which share 4 words but revise nothing)
+    #   (b) same type + >=4 shared words + IDENTICAL number sets
+    #       (same fact restated — collapses duplicates, spares pairs whose
+    #       values genuinely differ)
+    #   (c) cross-type + >=4 shared words (unchanged; proven in the 18-turn
+    #       hard test on the TTL 60s->300s constraint->decision revision)
+    # ALL matching stale entries are removed (the old loop broke after one).
     def _merge_patch(self, patch: SemanticPatch) -> None:
-        """Merge a patch into memory with duplicate suppression and critical revision superseding."""
+        """Merge a patch into memory with duplicate suppression and critical revision supersession."""
         # exact duplicate suppression (same type, same payload)
         for existing in self.patches:
             if existing.patch_type == patch.patch_type and existing.payload == patch.payload:
@@ -77,21 +115,32 @@ class DSPMMemory:
             for existing in self.patches:
                 if existing.is_critical and existing.fingerprint == patch.fingerprint:
                     return
-        # critical revision supersession
+        # critical supersession — collect ALL stale entries, then remove
         if patch.is_critical:
+            new_words = _content_words(patch.payload)
+            new_nums = _numbers(patch.payload)
+            marker = _has_revision_marker(patch.payload)
+            stale = []
             for existing in self.patches:
                 if not existing.is_critical:
                     continue
                 if existing.turn_index > patch.turn_index:
                     continue  # never let an older patch supersede a newer one
+                shared = new_words & _content_words(existing.payload)
                 same_type = existing.patch_type == patch.patch_type
                 if same_type:
-                    is_revision = self._jaccard(existing.payload, patch.payload) >= REVISION_OVERLAP
+                    if marker and len(shared) >= 3:
+                        stale.append(existing)          # (a) revision
+                        continue
+                    if len(shared) >= 4 and new_nums and new_nums == _numbers(existing.payload):
+                        stale.append(existing)          # (b) same-value restatement
+                        continue
                 else:
-                    is_revision = self._content_overlap(existing.payload, patch.payload) >= 4
-                if is_revision:
-                    self.patches.remove(existing)
-                    break
+                    if len(shared) >= 4:
+                        stale.append(existing)          # (c) cross-type revision
+                        continue
+            for s in stale:
+                self.patches.remove(s)
         self.patches.append(patch)
 
     def _jaccard(self, left: str, right: str) -> float:
@@ -103,12 +152,8 @@ class DSPMMemory:
         return len(a & b) / len(a | b) if (a | b) else 0.0
 
     def _content_overlap(self, left: str, right: str) -> int:
-        """Count shared non-stopword tokens (with light plural normalization)."""
-        a = {_normalize(w) for w in left.lower().split()
-             if w not in _STOPWORDS and len(w) > 1}
-        b = {_normalize(w) for w in right.lower().split()
-             if w not in _STOPWORDS and len(w) > 1}
-        return len(a & b)
+        """Count shared normalized non-stopword tokens."""
+        return len(_content_words(left) & _content_words(right))
 
     def get_context(self, query: str = "") -> str:
         """Return the compressed context string produced by the DSPM engine."""
