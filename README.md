@@ -2,7 +2,7 @@
 
 > Compress multi-turn LLM conversations by 80%+ while guaranteeing every constraint and decision survives.
 
-[![PyPI version](https://img.shields.io/pypi/v/dspm-memory?cache=0)](https://pypi.org/project/dspm-memory/)
+   [![PyPI version](https://img.shields.io/pypi/v/dspm-memory?label=pypi&cacheSeconds=300)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
