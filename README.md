@@ -1,6 +1,6 @@
 # DSPM Memory
 
-> Compress multi-turn LLM conversations by 80%+ while every constraint and decision survives
+> Compress multi-turn LLM conversations by 80%+ while every constraint and decision survives.
 >
 > 100% critical retention across our benchmark suite — under impossibly small budgets, criticals are trimmed to their word floor and dropped only as a documented last resort.
 
@@ -64,9 +64,9 @@ llm = OpenAI(
     # base_url="https://api.groq.com/openai/v1"  # uncomment for Groq
 )
 
-# budget=120 so compression is visible even in this small example;
+# budget=60 so compression is visible even in this small example;
 # use 200-300 for real conversations
-memory = DSPMMemory(budget=120, llm_client=llm, model="gpt-4o-mini")
+memory = DSPMMemory(budget=60, llm_client=llm, model="gpt-4o-mini")
 
 memory.add_turn("user", "Building a payment API. Hard rules: PCI-DSS compliant, max fee 0.5%, deadline Friday.")
 memory.add_turn("assistant", "PCI-DSS needs tokenized card storage and quarterly ASV scans. Tracking the 0.5% fee cap.")
@@ -82,13 +82,14 @@ print(memory.stats)
 
 **Output:**
 ```
+[DEC] Track the 0.5% fee cap.
+[CON] PCI-DSS requires tokenized card storage and ASV
+[DEC] webhook timeout updated to 10 seconds
 [CON] PCI-DSS compliant, max fee 0.5%, deadline Friday
-[CON] tokenized card storage, quarterly ASV scans
-[DEC] Webhook timeout 10 seconds; 30s superseded
-{'turns': 6, 'total_patches': 9, 'critical_total': 5, 'critical_selected': 5, 'crr': 100, 'budget': 120, ...}
+{'turns': 6, 'total_patches': 4, 'critical_total': 4, 'critical_selected': 4, 'crr': 100, 'budget': 60, 'raw_tokens': 61, 'context_tokens': 56, 'trr': 9}
 ```
 
-Note the revision: the 30-second entry is gone, replaced by 10 seconds — and `crr: 100`. Every constraint survives; stale values don't.
+Note the revision: only the 10-second entry remains — the 30s setting is fully superseded. The fee cap and deadline survived compression, `trr: 9` shows real token reduction even at this small scale, and `crr: 100` throughout.
 
 ---
 
@@ -127,7 +128,7 @@ Save files are portable JSON, written atomically (a crash mid-save can't corrupt
 - Under budget pressure, payloads are trimmed numbers-first — and units bind to their numbers (`30 seconds` stays `30 seconds`, never just `30`)
 - When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old — including cross-type revisions (a constraint revised by a decision) and terse patches
 - A critical is only dropped as a last resort: every critical already at its 2-word floor and budget still cannot hold them
-- Transient API failures (rate limits, 5xx) are retried with backoff automatically; if they keep failing, the original error is raised so your app can handle it
+- Transient API failures (rate limits, 5xx) are retried automatically with backoff — three attempts before the error surfaces
 
 > **Ablation result:** Removing the shadow-selection mechanism collapses CRR from 100% to 37.9%, isolating the guarantee to a single identifiable component.
 
@@ -217,6 +218,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 | Version | Changes |
 |---------|---------|
+| 0.1.7 | README-first release (0.1.6's PyPI page was frozen pre-update — built after README finalization this time). Compound units ("per minute") and key constraint nouns ("timeout", "limit") survive trimming as atomic number-spans. "now"/"moved" recognized as revision verbs, and the extractor preserves revision verbs in payloads (real-model quickstart caught a stale-value contradiction). Claims scoped to benchmarks; retry behavior accurately described. Test scripts moved to `scripts/` with exposed API key revoked and stripped. `semantic` extra documented. Python 3.13 classifier; status → Beta. 3 new tests (27 total). |
 | 0.1.6 | **Cross-type revision supersession fixed:** revisions sharing only 3 content words previously survived as contradictions (found in external review). Units now bind to their numbers during trimming (`30 seconds`, never bare `30`). Automatic retry with backoff on rate limits and transient 5xx errors in `add_turn()`. Homepage added to PyPI metadata. 5 regression tests (24 total). |
 | 0.1.5 | **Budget fix:** changing `memory.budget` was silently ignored — the engine kept an independent budget copy. Now synced on every `get_context()`. New `set_budget()` method. `stats` now measures the actual joined context and reports the active budget. 2 regression tests (19 total). |
 | 0.1.4 | Persistence: `memory.save()` / `memory.load()` — cross-session long-term memory as portable JSON. Atomic writes, merge-on-load, revisions supersede stale values. 8 new tests (17 total). |
