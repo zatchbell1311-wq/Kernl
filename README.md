@@ -54,12 +54,16 @@ llm = OpenAI(
     # base_url="https://api.groq.com/openai/v1"  # uncomment for Groq
 )
 
-memory = DSPMMemory(budget=250, llm_client=llm, model="gpt-4o-mini")
+# budget=120 so compression is visible even in this small example;
+# use 200-300 for real conversations
+memory = DSPMMemory(budget=120, llm_client=llm, model="gpt-4o-mini")
 
-memory.add_turn("user", "Build a REST API. Must use PostgreSQL, JWT auth, deadline is Friday.")
-memory.add_turn("assistant", "PostgreSQL with SQLAlchemy, JWT via python-jose. Access tokens 15 min.")
-memory.add_turn("user", "All PII must be encrypted at rest with AES-256. No exceptions.")
-memory.add_turn("assistant", "AES-256 at rest for all PII fields, keys in AWS KMS with quarterly rotation.")
+memory.add_turn("user", "Building a payment API. Hard rules: PCI-DSS compliant, max fee 0.5%, deadline Friday.")
+memory.add_turn("assistant", "PCI-DSS needs tokenized card storage and quarterly ASV scans. Tracking the 0.5% fee cap.")
+memory.add_turn("user", "Webhook timeout must be 30 seconds.")
+memory.add_turn("assistant", "Webhook timeout set to 30 seconds with automatic retries.")
+memory.add_turn("user", "Change the webhook timeout to 10 seconds instead — 30 is too slow.")
+memory.add_turn("assistant", "Updated: webhook timeout is now 10 seconds; the 30s setting is superseded.")
 
 context = memory.get_context(query="What are the hard requirements?")
 print(context)
@@ -68,13 +72,13 @@ print(memory.stats)
 
 **Output:**
 ```
-[CON] Stack: PostgreSQL, JWT auth. Deadline Friday.
-[CON] Access tokens 15 minutes.
-[CON] All PII must be encrypted at rest with AES-256. No exceptions.
-[CON] AES-256 at rest; keys in AWS KMS, quarterly rotation.
+[CON] PCI-DSS compliant, max fee 0.5%, deadline Friday
+[CON] tokenized card storage, quarterly ASV scans
+[DEC] Webhook timeout 10 seconds; 30s superseded
+{'turns': 6, 'total_patches': 9, 'critical_total': 5, 'critical_selected': 5, 'crr': 100, 'budget': 120, ...}
 ```
 
-Every constraint is present. Every time.
+Note the revision: the 30-second entry is gone, replaced by 10 seconds — and `crr: 100`. Every constraint survives; stale values don't.
 
 ---
 
@@ -110,9 +114,10 @@ Save files are portable JSON, written atomically (a crash mid-save can't corrupt
 `[CON]` and `[DEC]` patches are structurally protected:
 
 - Never dropped by deduplication, fusion, or pruning
-- Under budget pressure, payloads are trimmed numbers-first — thresholds, versions, and units survive longest
-- When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old
+- Under budget pressure, payloads are trimmed numbers-first — and units bind to their numbers (`30 seconds` stays `30 seconds`, never just `30`)
+- When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old — including cross-type revisions (a constraint revised by a decision) and terse patches
 - A critical is only dropped as a last resort: every critical already at its 2-word floor and budget still cannot hold them
+- Transient API failures (rate limits, 5xx) are retried with backoff automatically — a free-tier 429 never crashes your app
 
 > **Ablation result:** Removing the shadow-selection mechanism collapses CRR from 100% to 37.9%, isolating the guarantee to a single identifiable component.
 
@@ -129,6 +134,8 @@ Tested across 7 domains × 40 turns each:
 | 400 | 395 | 72.4% | 100% |
 
 `CRR` = Critical Retention Rate. `TRR` = Token Reduction Ratio.
+
+**Provenance:** measured on 7 hand-authored 40-turn technical dialogues (API design, ML ops, IoT, security IR, supply chain, clinical workflow, project management); extraction and judging by GLM via OpenRouter (the since-renamed "ox-alpha" model). Numbers vary by extraction model and domain — check your own with `memory.stats`.
 
 ---
 
@@ -200,6 +207,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 | Version | Changes |
 |---------|---------|
+| 0.1.6 | **Cross-type revision supersession fixed:** revisions sharing only 3 content words previously survived as contradictions (found in external review). Units now bind to their numbers during trimming (`30 seconds`, never bare `30`). Automatic retry with backoff on rate limits so `add_turn()` never crashes on a free-tier 429. Homepage added to PyPI metadata. 5 regression tests (24 total). |
 | 0.1.5 | **Budget fix:** changing `memory.budget` was silently ignored — the engine kept an independent budget copy. Now synced on every `get_context()`. New `set_budget()` method. `stats` now measures the actual joined context and reports the active budget. 2 regression tests (19 total). |
 | 0.1.4 | Persistence: `memory.save()` / `memory.load()` — cross-session long-term memory as portable JSON. Atomic writes, merge-on-load, revisions supersede stale values. 8 new tests (17 total). |
 | 0.1.3 | Revision supersession fix: stale same-type criticals now removed when superseded. Robust normalized content-word matching. |
