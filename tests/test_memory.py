@@ -196,3 +196,109 @@ def test_set_budget():
     assert mem.budget == 80
     assert mem.engine.budget == 80
     assert count_tokens(mem.get_context(query='overview')) <= 80
+
+
+# ── v0.1.6: external-review regression tests ──────────────────────
+# Three issues found in a user review of v0.1.5.
+
+def test_cross_type_revision_three_shared_words():
+    """v0.1.6: a cross-type revision sharing only 3 content words
+    previously survived as CONTRADICTORY criticals. Reported case:
+    constraint 'Webhook timeout must be 30 seconds' revised by decision
+    'Updated webhook timeout changed to 10 seconds instead' — shared
+    words {webhook, timeout, seconds} = 3, but the old cross-type rule
+    required >=4. Both stayed. Contradictory critical info is the worst
+    failure mode for a 'never lose important info' claim."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Updated webhook timeout changed to 10 seconds instead', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"expected 1 critical, got {crits}"
+    assert '10' in crits[0] and '30' not in crits[0]
+
+
+def test_cross_type_complementary_facts_still_safe():
+    """v0.1.6 guard: the loosened cross-type rule (>=3 words + marker) must
+    NOT collapse complementary facts. 'Access tokens expire in 15 minutes'
+    (constraint) vs 'Refresh tokens updated to 30 days' (decision) share
+    only {token} = 1 word — must both survive."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Access tokens expire in 15 minutes', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Refresh tokens updated to 30 days', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, f"complementary facts wrongly merged: {crits}"
+    assert any('15' in c for c in crits)
+    assert any('30' in c for c in crits)
+
+
+def test_units_survive_tight_budget():
+    """v0.1.6: at tight budgets the unit was trimmed from its number —
+    a user observed 'Webhook timeout must 30' (30 what?). Units now bind
+    to numbers during trimming."""
+    m = DSPMMemory(budget=30)
+    for i, payload in enumerate([
+        'Webhook timeout must be 30 seconds',
+        'Rate limit 1000 requests per minute',
+        'Access tokens expire in 15 minutes',
+        'Cache TTL 60 seconds',
+    ]):
+        m._merge_patch(SemanticPatch(f'p{i}_0', i, 'constraint', payload, []))
+    ctx = m.get_context(query='timeouts and limits')
+    for num, unit in [('30', 'second'), ('15', 'minute'), ('60', 'second')]:
+        if num in ctx:
+            assert unit in ctx.lower(), f"'{num}' lost its unit: {ctx!r}"
+
+
+def test_rate_limit_retry():
+    """v0.1.6: extract_turn retries transient 429s with backoff instead of
+    crashing add_turn(). Two 429s then success = 3 calls, 1 patch."""
+    from dspm.extractor import extract_turn
+    calls = {'n': 0}
+
+    class FlakyClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls['n'] += 1
+                    if calls['n'] < 3:
+                        e = Exception('Rate limit reached')
+                        e.status_code = 429
+                        raise e
+                    return MockResponse(json.dumps(
+                        [{'patch_type': 'entity', 'payload': 'Stripe', 'patch_id': 'x'}]))
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    patches = extract_turn(FlakyClient(), 'test-model', 'We use Stripe.', 0)
+    assert calls['n'] == 3
+    assert len(patches) == 1 and patches[0].payload == 'Stripe'
+
+
+def test_rate_limit_non_retryable_raises():
+    """v0.1.6 guard: 401 (bad key) must raise immediately — no pointless
+    retries against a dead credential."""
+    from dspm.extractor import extract_turn
+    calls = {'n': 0}
+
+    class BadKeyClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls['n'] += 1
+                    e = Exception('Invalid API key')
+                    e.status_code = 401
+                    raise e
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    with pytest.raises(Exception):
+        extract_turn(BadKeyClient(), 'test-model', 'Hello', 0)
+    assert calls['n'] == 1   # raised on first attempt, no retries

@@ -67,11 +67,6 @@ class DSPMEngine:
 
         return selected, diagnostics
 
-    # FIXED (v0.1.2): criticals were keyed by "critical-{patch_id}" — when an
-    # LLM reuses patch_ids across turns, dict assignment silently OVERWRITES
-    # critical patches (observed: 19 criticals -> 7, CRR 36%). Criticals now
-    # pass through T1 untouched; duplicate suppression among criticals is
-    # T0's job (write-time merge in memory.py).
     def _dedup_fingerprints(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T1: deduplicate NON-CRITICAL patches by fingerprint; criticals pass through."""
         keep = {}
@@ -87,9 +82,6 @@ class DSPMEngine:
                 keep[p.fingerprint] = p
         return crits + list(keep.values())
 
-    # FIXED (v0.1.2): criticals were grouped under groups[p.patch_id] —
-    # colliding LLM patch_ids overwrote each other here too. Criticals are
-    # now never fused (keyed by object identity).
     def _slot_fusion(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T2: fuse duplicate slot keys for non-critical patches by highest utility and turn index."""
         groups = {}
@@ -110,8 +102,6 @@ class DSPMEngine:
                 seen.add(id(p))
         return out
 
-    # FIXED (v0.1.1): only rewrite as a word-level diff when it shares a
-    # slot_key with an earlier patch AND the diff is actually shorter.
     def _delta_encoding(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T3: rewrite non-critical patches sharing a slot_key as word-level diffs, only when shorter."""
         slot_base = {}
@@ -140,8 +130,6 @@ class DSPMEngine:
             out.append(p)
         return out
 
-    # FIXED (v0.1.1): criticals are ALWAYS kept; only intermediate
-    # non-critical nodes (both parents and children) are pruned.
     def _causal_pruning(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T4: remove intermediate non-critical nodes from the dependency graph."""
         kept_ids = {p.patch_id for p in patches}
@@ -211,13 +199,6 @@ class DSPMEngine:
             return 0.0
         return float(np.dot(a, b) / denom)
 
-    # FIXED (v0.1.2): the budget is now enforced on the ACTUAL joined
-    # context string. Previously the fit measured sum(per-patch tokens),
-    # which under-counts the newline tokens between patches — the context
-    # could exceed the budget by a few tokens (observed: 104/154/251 at
-    # budgets 100/150/250). A final safety pass now drops non-criticals
-    # first, then trims criticals, and drops a critical only at the
-    # 2-word floor.
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
         criticals = sorted([p for p in work if p.is_critical], key=lambda p: p.utility, reverse=True)
@@ -247,8 +228,6 @@ class DSPMEngine:
                 selected_total.remove(min(selected_total, key=lambda q: q.utility))
         return selected_total, diagnostics
 
-    # FIXED (v0.1.1 proportional fit; v0.1.2: pass-2 now measures the JOINED
-    # critical block, not the per-patch sum, so newline tokens are counted).
     def _fit_criticals(self, criticals: List[SemanticPatch]) -> int:
         """Proportionally fit critical patches into the critical token budget."""
         if not criticals:
@@ -278,10 +257,13 @@ class DSPMEngine:
                 criticals.remove(worst)
         return trimmed
 
-    # FIXED (v0.1.1): sort direction corrected; keeps numbers/units/acronyms/
-    # proper-nouns longest, preserving original word order.
+    # FIXED (v0.1.6): a unit following its number was being trimmed away at
+    # tight budgets — a user observed "Webhook timeout must 30" (30 what?
+    # ms? seconds? minutes?). A word immediately after a number now carries
+    # a high keep-weight, so "30 seconds", "15 minutes", "60 days" survive
+    # as bound pairs.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
-        """Trim payload to max_words; numbers/units/acronyms/proper-nouns survive longest."""
+        """Trim payload to max_words; numbers and their units survive longest."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
@@ -294,6 +276,10 @@ class DSPMEngine:
                 s += 1   # units, acronyms
             if w[:1].isupper():
                 s += 1   # proper nouns (tools, systems)
+            # v0.1.6: a unit binds to its number — the word immediately
+            # after a number is usually its unit (seconds, ms, minutes...).
+            if i > 0 and re.search(r"\d", words[i - 1]):
+                s += 2
             return (s, -i)  # ties → keep earlier word
 
         ranked = sorted(range(len(words)),

@@ -43,9 +43,7 @@ def _normalize(word: str) -> str:
 
 
 def _content_words(text: str) -> set:
-    """Robust content-word set: \\w+ tokens, stopwords removed, plurals normalized.
-    Unlike raw whitespace Jaccard, this survives 'seconds;' vs 'seconds' and
-    '30-second' vs '30'."""
+    """Robust content-word set: \\w+ tokens, stopwords removed, plurals normalized."""
     return {_normalize(w) for w in re.findall(r"\w+", text.lower())
             if w not in _STOPWORDS and len(w) > 1}
 
@@ -59,11 +57,6 @@ def _has_revision_marker(text: str) -> bool:
     return bool(_REVISION_MARKERS & {w.lower() for w in re.findall(r"\w+", text)})
 
 
-# v0.1.4: topic anchor for terse-revision matching (rule a2). Short patches
-# like "deadline Oct 20" cannot reach 3 shared content words, so rule (a)
-# never fires for them. The first meaningful topic word serves as the
-# anchor instead. Revision markers themselves are excluded from the anchor
-# so "updated Stripe X" and "updated deadline Y" never collide.
 def _slot_head(text: str) -> str:
     """First meaningful topic word: >=3 chars, not a stopword, not a revision
     marker. Empty string if none found."""
@@ -104,29 +97,19 @@ class DSPMMemory:
         self.turns += 1
         return patches
 
-    # FIXED (v0.1.3): same-type revisions phrased differently slipped through
-    # (raw-token Jaccard defeated by "seconds;" vs "seconds" and "30-second"
-    # vs "30" — observed live: four webhook-timeout decisions, two saying 30s
-    # and two saying 10s, all surviving in one context). Supersession now
-    # uses robust normalized content words with three rules:
-    #   (a) same type + >=3 shared words + revision verb in the new payload
-    #       (the revision-verb requirement spares complementary facts like
-    #       "refresh tokens rotate every 30 days" vs "access tokens 15 min,
-    #       refresh tokens 30 days", which share 4 words but revise nothing)
-    #   (a2) same type + same topic anchor + revision verb + CHANGED numbers
-    #       (v0.1.4: terse patches such as "deadline Oct 20" cannot reach 3
-    #       shared words, so rule (a) never fires for them. Real extractions
-    #       produce patches this short — e.g. "z-score > 3" — so revisions of
-    #       terse values were leaking through. The anchor excludes marker
-    #       words, so complementary facts with different topics never
-    #       collide; the changed-numbers requirement means "updated" alone
-    #       with the same value falls through to rule (b) instead)
-    #   (b) same type + >=4 shared words + IDENTICAL number sets
-    #       (same fact restated — collapses duplicates, spares pairs whose
-    #       values genuinely differ)
-    #   (c) cross-type + >=4 shared words (unchanged; proven in the 18-turn
-    #       hard test on the TTL 60s->300s constraint->decision revision)
-    # ALL matching stale entries are removed (the old loop broke after one).
+    # Supersession rules (accumulated v0.1.3 → v0.1.6):
+    #   (a)  same type + >=3 shared words + revision verb
+    #   (a2) same type + same topic anchor + revision verb + changed numbers
+    #   (b)  same type + >=4 shared words + IDENTICAL number sets (restatement)
+    #   (c)  cross-type + >=4 shared words, OR (v0.1.6) >=3 + revision verb
+    #   (c2) cross-type + same anchor + revision verb + changed numbers
+    # FIXED (v0.1.6): the cross-type rule required >=4 shared words with no
+    # marker relaxation. A user's real test — constraint "Webhook timeout
+    # must be 30 seconds" revised by decision "Updated webhook timeout
+    # changed to 10 seconds instead" — shares only 3 content words, so BOTH
+    # survived as contradictory criticals. Cross-type revisions now fire at
+    # >=3 shared words when a revision verb is present (mirroring rule a),
+    # plus a terse cross-type path (c2) mirroring a2.
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical revision supersession."""
         # exact duplicate suppression (same type, same payload)
@@ -164,8 +147,14 @@ class DSPMMemory:
                         stale.append(existing)          # (b) same-value restatement
                         continue
                 else:
-                    if len(shared) >= 4:
+                    # (c) cross-type revision — >=4 words, or >=3 with marker (v0.1.6)
+                    if len(shared) >= 4 or (marker and len(shared) >= 3):
                         stale.append(existing)          # (c) cross-type revision
+                        continue
+                    # (c2) terse cross-type revision (v0.1.6, mirrors a2)
+                    if marker and new_head and new_head == _slot_head(existing.payload) \
+                            and new_nums != _numbers(existing.payload):
+                        stale.append(existing)          # (c2) terse cross-type
                         continue
             for s in stale:
                 self.patches.remove(s)
@@ -183,14 +172,7 @@ class DSPMMemory:
         """Count shared normalized non-stopword tokens."""
         return len(_content_words(left) & _content_words(right))
 
-    # FIXED (v0.1.5): memory.budget and engine.budget were independent
-    # copies — a user changing `memory.budget` saw no effect because the
-    # engine kept using its own copy (reported by a real user: "changing the
-    # budget shows the same results"). The engine budget is now synced from
-    # self.budget on every call, so both assignment styles work:
-    #   memory.budget = 100
-    #   memory.set_budget(100)
-    #   memory.engine.budget = 100   (legacy path, still honored)
+    # FIXED (v0.1.5): engine budget synced from self.budget on every call.
     def get_context(self, query: str = "") -> str:
         """Return the compressed context string produced by the DSPM engine."""
         self.engine.budget = self.budget
@@ -210,12 +192,6 @@ class DSPMMemory:
         """Return the list of every patch currently stored in memory."""
         return list(self.patches)
 
-    # FIXED (v0.1.5): context_tokens previously summed per-patch token costs,
-    # which under-counts the newline tokens in the joined context (the same
-    # under-count fixed in the engine at v0.1.2) — stats could disagree with
-    # the actual context size the engine enforces. It now measures the real
-    # joined context string. `budget` is also reported so a changed-but-
-    # unsynced budget would be immediately visible.
     @property
     def stats(self) -> Dict[str, Any]:
         """Return a summary of memory health, selected-critical retention, and token reduction rate."""
@@ -248,35 +224,17 @@ class DSPMMemory:
         self._last_context = ""
         self.engine.reset_ema()
 
-    # ── v0.1.5: budget control ─────────────────────────────────────
-
     def set_budget(self, budget: int) -> None:
         """Update the token budget. Takes effect on the next get_context() call."""
         self.budget = int(budget)
         self.engine.budget = self.budget
 
-    # ── v0.1.4: persistence — cross-session, cross-chat long-term memory ──
+    # ── v0.1.4: persistence ─────────────────────────────────────────
 
     def save(self, path: str) -> int:
-        """Persist the memory notebook to a JSON file (atomic write).
-
-        Call when a chat ends. Returns the number of patches saved.
-
-        Example:
-            memory.save("user_dhruv.json")
-        """
+        """Persist the memory notebook to a JSON file (atomic write)."""
         return save_memory(self, path)
 
     def load(self, path: str) -> int:
-        """Load a notebook from a JSON file into this memory.
-
-        Call when a chat starts. Merge semantics: saved patches enter
-        through the same duplicate-suppression and supersession rules as
-        live turns, so a revision saved earlier supersedes stale values.
-        Returns the number of patches newly loaded (0 if the file is
-        missing or empty).
-
-        Example:
-            memory.load("user_dhruv.json")   # Chat 2 now recalls Chat 1
-        """
+        """Load a notebook from a JSON file into this memory (merge semantics)."""
         return load_memory(self, path)
