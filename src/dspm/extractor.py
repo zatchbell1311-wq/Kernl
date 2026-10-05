@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional
 
 from dspm.patch import SemanticPatch
@@ -90,16 +91,12 @@ def parse_extraction(raw_text: str) -> List[Dict[str, Any]]:
     return []
 
 
-# FIXED (v0.1.1): the prompt never specified the JSON keys, so models
-# commonly returned {"type": ...} or free-form objects that the parser
-# then discarded. The schema is now stated explicitly, including the
-# payload-length and numbers-verbatim requirements from the paper.
 def _build_system_prompt() -> str:
     return (
         "You are a semantic patch extractor. Extract at most 5 semantic patches from the turn as a raw JSON array. "
         "Each element must be a JSON object with exactly these keys: "
         '"patch_type" (one of: constraint, decision, code, equation, entity, structure), '
-        '"payload" (an 8-20 word note preserving every number, version, and threshold verbatim), '
+        '"payload" (an 8-20 word note preserving every number, version, threshold AND UNIT verbatim — never separate a number from its unit, e.g. write "30 seconds" not "30"), '
         '"patch_id" (a unique string), '
         '"dependencies" (a list of patch_ids this depends on; empty list if none). '
         "Rules: constraint max 1 per turn, truly non-negotiable specs only. "
@@ -111,12 +108,7 @@ def _build_system_prompt() -> str:
 
 
 def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent_context: str = '') -> List[SemanticPatch]:
-    """Extract semantic patches from a conversation turn using an LLM client.
-
-    The function sends a structured prompt to the LLM, parses the response,
-    and materializes SemanticPatch objects while filtering invalid types and
-    de-duplicating patch records within the same turn.
-    """
+    """Extract semantic patches from a conversation turn using an LLM client."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 
@@ -130,9 +122,27 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
         {"role": "user", "content": user_content},
     ]
 
-    # FIXED (v0.1.1): some reasoning models return content=None with HTTP
-    # 200; `or ""` prevents a TypeError and lets the parser return [].
-    response = llm_client.chat.completions.create(model=model, messages=messages, temperature=0.0, max_tokens=2000)
+    # FIXED (v0.1.6): retry with backoff on transient errors (429 rate
+    # limits, 5xx, network). Previously a single free-tier 429 propagated
+    # out of add_turn() and crashed the host app mid-conversation.
+    # Non-retryable HTTP errors (400/401/403/404) raise immediately —
+    # retrying a bad key or dead model is pointless.
+    NON_RETRYABLE = {400, 401, 403, 404}
+    response = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            response = llm_client.chat.completions.create(
+                model=model, messages=messages, temperature=0.0, max_tokens=2000)
+            break
+        except Exception as e:
+            last_exc = e
+            if getattr(e, 'status_code', None) in NON_RETRYABLE:
+                raise
+            time.sleep(2 * (attempt + 1))   # 2s, 4s
+    if response is None:
+        raise last_exc
+
     raw = response.choices[0].message.content or ""
     parsed = parse_extraction(raw)
 
@@ -141,22 +151,14 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
     for item in parsed:
         if not isinstance(item, dict):
             continue
-        # FIXED (v0.1.1): accept "type" as a fallback key — most models
-        # return {"type": ...} even when the prompt asks for "patch_type".
         p_type = str(item.get('patch_type') or item.get('type') or '').lower().strip()
         if p_type not in PATCH_TYPES:
             continue
         payload = str(item.get('payload') or item.get('text') or '')
         if not payload.strip():
             continue
-        # FIXED (v0.1.1): deterministic per-turn id (hash() is not stable
-        # across processes) — mirrors the Colab pipeline's p{turn}_{i}.
         patch_id = f"p{turn_index}_{len(patches)}"
 
-        # FIXED (v0.1.1): only pass the fields the LLM should control.
-        # Fingerprint/slot_key/token_cost were previously taken from the
-        # LLM's (often empty/garbage) values; SemanticPatch.__post_init__
-        # now computes them authoritatively.
         patch = SemanticPatch(
             patch_id=patch_id,
             turn_index=turn_index,
@@ -167,8 +169,6 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
                          ([str(item['dependencies'])] if isinstance(item.get('dependencies'), str) else []),
         )
 
-        # FIXED (v0.1.1): dedupe by fingerprint (same content) instead of
-        # by LLM-supplied id — ids are unreliable across turns.
         if patch.fingerprint in seen_fingerprints:
             continue
         seen_fingerprints.add(patch.fingerprint)
