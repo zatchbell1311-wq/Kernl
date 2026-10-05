@@ -165,10 +165,6 @@ def test_patch_dataclass_manual():
 
 
 # ── v0.1.5: budget bug regression tests ───────────────────────────
-# Reported by a real user: "even after changing the budget, it shows
-# the same results." Root cause: DSPMMemory.budget and engine.budget
-# were independent copies — memory.budget assignments were silently
-# ignored by the engine.
 
 def test_budget_change_takes_effect():
     """Changing memory.budget must change the compressed output."""
@@ -199,16 +195,10 @@ def test_set_budget():
 
 
 # ── v0.1.6: external-review regression tests ──────────────────────
-# Three issues found in a user review of v0.1.5.
 
 def test_cross_type_revision_three_shared_words():
     """v0.1.6: a cross-type revision sharing only 3 content words
-    previously survived as CONTRADICTORY criticals. Reported case:
-    constraint 'Webhook timeout must be 30 seconds' revised by decision
-    'Updated webhook timeout changed to 10 seconds instead' — shared
-    words {webhook, timeout, seconds} = 3, but the old cross-type rule
-    required >=4. Both stayed. Contradictory critical info is the worst
-    failure mode for a 'never lose important info' claim."""
+    previously survived as CONTRADICTORY criticals."""
     m = DSPMMemory(budget=250)
     m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
                                  'Webhook timeout must be 30 seconds', []))
@@ -220,10 +210,8 @@ def test_cross_type_revision_three_shared_words():
 
 
 def test_cross_type_complementary_facts_still_safe():
-    """v0.1.6 guard: the loosened cross-type rule (>=3 words + marker) must
-    NOT collapse complementary facts. 'Access tokens expire in 15 minutes'
-    (constraint) vs 'Refresh tokens updated to 30 days' (decision) share
-    only {token} = 1 word — must both survive."""
+    """v0.1.6 guard: the loosened cross-type rule must NOT collapse
+    complementary facts."""
     m = DSPMMemory(budget=250)
     m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
                                  'Access tokens expire in 15 minutes', []))
@@ -236,9 +224,8 @@ def test_cross_type_complementary_facts_still_safe():
 
 
 def test_units_survive_tight_budget():
-    """v0.1.6: at tight budgets the unit was trimmed from its number —
-    a user observed 'Webhook timeout must 30' (30 what?). Units now bind
-    to numbers during trimming."""
+    """v0.1.6: at tight budgets the unit was trimmed from its number.
+    Units bind to numbers during trimming."""
     m = DSPMMemory(budget=30)
     for i, payload in enumerate([
         'Webhook timeout must be 30 seconds',
@@ -255,7 +242,7 @@ def test_units_survive_tight_budget():
 
 def test_rate_limit_retry():
     """v0.1.6: extract_turn retries transient 429s with backoff instead of
-    crashing add_turn(). Two 429s then success = 3 calls, 1 patch."""
+    crashing add_turn()."""
     from dspm.extractor import extract_turn
     calls = {'n': 0}
 
@@ -281,8 +268,7 @@ def test_rate_limit_retry():
 
 
 def test_rate_limit_non_retryable_raises():
-    """v0.1.6 guard: 401 (bad key) must raise immediately — no pointless
-    retries against a dead credential."""
+    """v0.1.6 guard: 401 (bad key) must raise immediately."""
     from dspm.extractor import extract_turn
     calls = {'n': 0}
 
@@ -301,4 +287,39 @@ def test_rate_limit_non_retryable_raises():
 
     with pytest.raises(Exception):
         extract_turn(BadKeyClient(), 'test-model', 'Hello', 0)
-    assert calls['n'] == 1   # raised on first attempt, no retries
+    assert calls['n'] == 1
+
+
+# ── v0.1.7: compound-unit and key-noun regression tests ──────────
+# Found in external review of 0.1.6:
+#   "Rate limit set to 100 requests per minute" -> "100 requests API" (lost unit)
+#   "Webhook timeout must be 30 seconds" -> "Webhook 30 seconds" (lost noun)
+
+def test_compound_unit_survives_tight_budget():
+    """v0.1.7: compound units ('per minute') sat 2-3 words from their
+    number and were trimmed at tight budgets. They now bind to the number."""
+    m = DSPMMemory(budget=22)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Rate limit set to 100 requests per minute', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    ctx = m.get_context(query='limits and timeouts')
+    if '100' in ctx:
+        assert 'minute' in ctx.lower(), f"'100' lost 'per minute': {ctx!r}"
+    if '30' in ctx:
+        assert 'second' in ctx.lower(), f"'30' lost 'seconds': {ctx!r}"
+
+
+def test_key_noun_survives_tight_budget():
+    """v0.1.7: the constraint's subject noun must survive alongside its
+    number+unit. (The earlier version of this test passed VACUOUSLY — one
+    constraint at budget 18 allowed 10 words, so nothing was ever trimmed.
+    Two constraints force the 3-word trim where noun/number/unit compete.)"""
+    m = DSPMMemory(budget=18)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Cache TTL 60 seconds', []))
+    ctx = m.get_context(query='webhook settings')
+    assert '30' in ctx and 'second' in ctx.lower(), f"number/unit lost: {ctx!r}"
+    assert 'timeout' in ctx.lower(), f"key noun lost: {ctx!r}"

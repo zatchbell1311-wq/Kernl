@@ -34,6 +34,22 @@ from dspm.patch import SemanticPatch, count_tokens
 class DSPMEngine:
     """Compression engine applying the DSPM seven-stage pipeline."""
 
+    # v0.1.7: unit words recognized for number-binding (the word
+    # immediately after a number). Compound units ("per minute") are
+    # detected separately in _trim_numeric_first.
+    _UNIT_WORDS = (
+        r"(ms|millisecond|milliseconds|s|sec|secs|second|seconds|"
+        r"min|mins|minute|minutes|hr|hrs|hour|hours|d|day|days|"
+        r"w|week|weeks|mo|month|months|y|yr|year|years|kb|mb|gb|tb|%)"
+    )
+    # v0.1.7: constraint subject nouns — the word that makes a bare
+    # number meaningful ("timeout" in "webhook timeout 30 seconds").
+    _KEY_NOUNS = (
+        r"(timeout|limit|rate|deadline|budget|threshold|ttl|latency|"
+        r"expiry|window|quota|cap|duration|interval|retention|"
+        r"cooldown|sla|uptime|fee|price|cost)s?"
+    )
+
     def __init__(self, budget: int = DEFAULT_BUDGET):
         self.budget = budget
         self.ema_query = {t: 0.0 for t in PATCH_TYPES}
@@ -236,7 +252,7 @@ class DSPMEngine:
         n = len(criticals)
         per_patch_words = max(2, int((limit / n - 4) / 1.4))
         trimmed = 0
-        # pass 1 — uniform proportional trim, numeric-first
+        # pass 1 — uniform proportional trim
         for p in criticals:
             before = len(p.payload.split())
             p.payload = self._trim_numeric_first(p.payload, per_patch_words)
@@ -257,34 +273,64 @@ class DSPMEngine:
                 criticals.remove(worst)
         return trimmed
 
-    # FIXED (v0.1.6): a unit following its number was being trimmed away at
-    # tight budgets — a user observed "Webhook timeout must 30" (30 what?
-    # ms? seconds? minutes?). A word immediately after a number now carries
-    # a high keep-weight, so "30 seconds", "15 minutes", "60 days" survive
-    # as bound pairs.
+    # FIXED (v0.1.6): units following numbers survived trimming.
+    # FIXED (v0.1.7, external review): weight-based scoring still let
+    # "timeout 30" (unit lost to tie-break) and even "Rate per" (compound
+    # unit +3 OUTRANKED its own number +2!) through at 2-word floors.
+    # Weights cannot guarantee number+unit integrity — so a number and its
+    # unit are now an ATOMIC SPAN, kept or dropped as a whole. A unit can
+    # never survive without its number, and a number never loses its unit.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
-        """Trim payload to max_words; numbers and their units survive longest."""
+        """Trim payload to max_words. Number+unit pairs are atomic spans;
+        selection priority: number-spans > compound units > number-adjacent
+        words > key constraint nouns > proper nouns > filler."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
 
-        def weight(i: int, w: str):
-            s = 0
-            if re.search(r"\d", w):
-                s += 2   # numbers, versions, thresholds
-            if "%" in w or w.isupper():
-                s += 1   # units, acronyms
-            if w[:1].isupper():
-                s += 1   # proper nouns (tools, systems)
-            # v0.1.6: a unit binds to its number — the word immediately
-            # after a number is usually its unit (seconds, ms, minutes...).
-            if i > 0 and re.search(r"\d", words[i - 1]):
-                s += 2
-            return (s, -i)  # ties → keep earlier word
+        # ── 1. identify protected spans ──────────────────────────────
+        spans = []          # (start, end, priority)
+        claimed = set()
+        i = 0
+        while i < len(words):
+            # compound unit: "per minute" / "an hour" / "a day"
+            if re.fullmatch(r"per|an|a", words[i].lower()) and i + 1 < len(words) \
+                    and re.fullmatch(r"(second|minute|hour|day|week|month|year)s?",
+                                     words[i + 1].lower().strip(".,;")):
+                spans.append((i, i + 1, 50))
+                claimed.update((i, i + 1)); i += 2; continue
+            # number + its unit: "30 seconds", "15 minutes", "500 mb"
+            if re.search(r"\d", words[i]) and i + 1 < len(words) \
+                    and re.fullmatch(self._UNIT_WORDS, words[i + 1].lower().strip(".,;")):
+                spans.append((i, i + 1, 100))
+                claimed.update((i, i + 1)); i += 2; continue
+            i += 1
 
-        ranked = sorted(range(len(words)),
-                        key=lambda i: weight(i, words[i]), reverse=True)[:max_words]
-        return " ".join(words[i] for i in sorted(ranked))
+        # ── 2. score remaining standalone words ─────────────────────
+        items = [(prio, -s, s, e) for (s, e, prio) in spans]
+        for j, w in enumerate(words):
+            if j in claimed:
+                continue
+            if re.search(r"\d", w):
+                prio = 100                    # bare number
+            elif j > 0 and re.search(r"\d", words[j - 1]):
+                prio = 40                    # number-adjacent ("requests")
+            elif re.fullmatch(self._KEY_NOUNS, w.lower().strip(".,;")):
+                prio = 30                    # constraint subject
+            elif w[:1].isupper():
+                prio = 20                    # proper noun
+            else:
+                prio = 10                    # filler
+            items.append((prio, -j, j, j))
+
+        # ── 3. greedy fill: priority desc, ties → earlier word ──────
+        items.sort(reverse=True)
+        keep, used = set(), 0
+        for (prio, _neg, s, e) in items:
+            if used + (e - s + 1) <= max_words:
+                keep.update(range(s, e + 1))
+                used += (e - s + 1)
+        return " ".join(words[j] for j in sorted(keep))
 
     def _adaptive_budgeting(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T7: allocate per-type budgets using the EMA-like query type signal."""
