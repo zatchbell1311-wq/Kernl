@@ -23,12 +23,17 @@ _STOPWORDS = {
 
 # v0.1.3: verbs that signal a payload REVISES an earlier value. Revisions in
 # real conversations announce themselves; complementary facts do not.
+# v0.1.7: added "now", "moved" — running the README quickstart against a
+# real model showed extractors often strip "updated"/"superseded" down to
+# "webhook timeout now 10 seconds"; without "now" as a marker, the stale
+# 30s entry survived as a contradictory critical.
 _REVISION_MARKERS = {
     "update", "updated", "change", "changed", "revise", "revised",
     "supersede", "superseded", "replace", "replaced", "instead",
     "raise", "raised", "lower", "lowered", "increase", "increased",
     "decrease", "decreased", "reduce", "reduced", "switch", "switched",
     "migrate", "migrated", "revert", "reverted",
+    "now", "moved",
 }
 
 
@@ -97,19 +102,12 @@ class DSPMMemory:
         self.turns += 1
         return patches
 
-    # Supersession rules (accumulated v0.1.3 → v0.1.6):
+    # Supersession rules (accumulated v0.1.3 → v0.1.7):
     #   (a)  same type + >=3 shared words + revision verb
     #   (a2) same type + same topic anchor + revision verb + changed numbers
     #   (b)  same type + >=4 shared words + IDENTICAL number sets (restatement)
-    #   (c)  cross-type + >=4 shared words, OR (v0.1.6) >=3 + revision verb
+    #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
-    # FIXED (v0.1.6): the cross-type rule required >=4 shared words with no
-    # marker relaxation. A user's real test — constraint "Webhook timeout
-    # must be 30 seconds" revised by decision "Updated webhook timeout
-    # changed to 10 seconds instead" — shares only 3 content words, so BOTH
-    # survived as contradictory criticals. Cross-type revisions now fire at
-    # >=3 shared words when a revision verb is present (mirroring rule a),
-    # plus a terse cross-type path (c2) mirroring a2.
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical revision supersession."""
         # exact duplicate suppression (same type, same payload)
@@ -147,11 +145,11 @@ class DSPMMemory:
                         stale.append(existing)          # (b) same-value restatement
                         continue
                 else:
-                    # (c) cross-type revision — >=4 words, or >=3 with marker (v0.1.6)
+                    # (c) cross-type revision — >=4 words, or >=3 with marker
                     if len(shared) >= 4 or (marker and len(shared) >= 3):
                         stale.append(existing)          # (c) cross-type revision
                         continue
-                    # (c2) terse cross-type revision (v0.1.6, mirrors a2)
+                    # (c2) terse cross-type revision (mirrors a2)
                     if marker and new_head and new_head == _slot_head(existing.payload) \
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (c2) terse cross-type
@@ -172,7 +170,6 @@ class DSPMMemory:
         """Count shared normalized non-stopword tokens."""
         return len(_content_words(left) & _content_words(right))
 
-    # FIXED (v0.1.5): engine budget synced from self.budget on every call.
     def get_context(self, query: str = "") -> str:
         """Return the compressed context string produced by the DSPM engine."""
         self.engine.budget = self.budget
@@ -228,8 +225,6 @@ class DSPMMemory:
         """Update the token budget. Takes effect on the next get_context() call."""
         self.budget = int(budget)
         self.engine.budget = self.budget
-
-    # ── v0.1.4: persistence ─────────────────────────────────────────
 
     def save(self, path: str) -> int:
         """Persist the memory notebook to a JSON file (atomic write)."""

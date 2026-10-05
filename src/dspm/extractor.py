@@ -96,7 +96,9 @@ def _build_system_prompt() -> str:
         "You are a semantic patch extractor. Extract at most 5 semantic patches from the turn as a raw JSON array. "
         "Each element must be a JSON object with exactly these keys: "
         '"patch_type" (one of: constraint, decision, code, equation, entity, structure), '
-        '"payload" (an 8-20 word note preserving every number, version, threshold AND UNIT verbatim — never separate a number from its unit, e.g. write "30 seconds" not "30"), '
+        '"payload" (an 8-20 word note preserving every number, version, threshold AND UNIT verbatim; '
+        'when the turn revises an earlier value, KEEP the revision verb in the payload, '
+        'e.g. "webhook timeout updated to 10 seconds" not just "webhook timeout 10 seconds"), '
         '"patch_id" (a unique string), '
         '"dependencies" (a list of patch_ids this depends on; empty list if none). '
         "Rules: constraint max 1 per turn, truly non-negotiable specs only. "
@@ -123,10 +125,8 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
     ]
 
     # FIXED (v0.1.6): retry with backoff on transient errors (429 rate
-    # limits, 5xx, network). Previously a single free-tier 429 propagated
-    # out of add_turn() and crashed the host app mid-conversation.
-    # Non-retryable HTTP errors (400/401/403/404) raise immediately —
-    # retrying a bad key or dead model is pointless.
+    # limits, 5xx, network). Non-retryable HTTP errors (400/401/403/404)
+    # raise immediately — retrying a bad key or dead model is pointless.
     NON_RETRYABLE = {400, 401, 403, 404}
     response = None
     last_exc = None

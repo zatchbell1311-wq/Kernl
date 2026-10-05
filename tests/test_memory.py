@@ -323,3 +323,21 @@ def test_key_noun_survives_tight_budget():
     ctx = m.get_context(query='webhook settings')
     assert '30' in ctx and 'second' in ctx.lower(), f"number/unit lost: {ctx!r}"
     assert 'timeout' in ctx.lower(), f"key noun lost: {ctx!r}"
+
+
+# ── v0.1.7: real-model quickstart capture regression test ─────────
+# Running the README quickstart against a real model showed extractors
+# strip "updated/superseded" down to "now" — the stale 30s entry
+# survived alongside the 10s revision as contradictory criticals.
+
+def test_now_marker_supersedes():
+    """'webhook timeout now 10 seconds' must supersede the stale 30s
+    decision even without 'updated'/'superseded' in the payload."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Webhook timeout set to 30 seconds with automatic retries', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'webhook timeout now 10 seconds', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"stale 30s survived 'now' revision: {crits}"
+    assert '10' in crits[0] and '30' not in crits[0]
