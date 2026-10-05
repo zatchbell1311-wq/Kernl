@@ -160,12 +160,20 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 | `llm_client` | OpenAI | None | Any OpenAI-compatible client |
 | `model` | str | `"gpt-4o-mini"` | Model used for patch extraction |
 
+The budget can be changed at any time:
+
+```python
+memory.budget = 100        # takes effect on the next get_context() call
+memory.set_budget(100)     # explicit alternative — same effect
+```
+
 ### Methods
 
 | Method | Description |
 |--------|-------------|
 | `add_turn(role, text)` | Add a conversation turn. Returns extracted patches. |
 | `get_context(query="")` | Returns compressed context string, ready for your prompt. |
+| `set_budget(budget)` | Update the token budget. Takes effect on the next `get_context()` call. |
 | `save(path)` | Persist the memory notebook to JSON (atomic write). |
 | `load(path)` | Load a notebook into memory (merge semantics, supersession on load). |
 | `reset()` | Clear all memory and start fresh. |
@@ -174,7 +182,7 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 | Property | Description |
 |----------|-------------|
-| `memory.stats` | Dict with token counts, patch counts, CRR |
+| `memory.stats` | Dict with token counts, patch counts, active budget, CRR |
 | `memory.critical_patches` | List of all critical patches currently in memory |
 | `memory.all_patches` | List of every patch in memory |
 
@@ -182,8 +190,8 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 ## Paper
 
-**DSPM: A Critical-Retention Approach to Long-Context Memory Compression for LLM Conversations**
-Dhruv Dubey, 2026
+**DSPM: A Critical-Retention Approach to Long-Context Memory Compression for LLM Conversations**  
+Dhruv Dubey, 2026  
 Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 ---
@@ -192,6 +200,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 | Version | Changes |
 |---------|---------|
+| 0.1.5 | **Budget fix:** changing `memory.budget` was silently ignored — the engine kept an independent budget copy. Now synced on every `get_context()`. New `set_budget()` method. `stats` now measures the actual joined context and reports the active budget. 2 regression tests (19 total). |
 | 0.1.4 | Persistence: `memory.save()` / `memory.load()` — cross-session long-term memory as portable JSON. Atomic writes, merge-on-load, revisions supersede stale values. 8 new tests (17 total). |
 | 0.1.3 | Revision supersession fix: stale same-type criticals now removed when superseded. Robust normalized content-word matching. |
 | 0.1.2 | Fixed critical-patch ID collisions (CRR 36% → 100% in 18-turn live test). Budget enforced on joined context string. |
