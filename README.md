@@ -42,6 +42,14 @@ pip install dspm-memory
 
 Requires Python 3.9+. Works with any OpenAI-compatible LLM provider.
 
+**Optional: semantic ranking**
+
+```bash
+pip install "dspm-memory[semantic]"
+```
+
+Adds sentence-transformer-based query alignment for better non-critical patch ranking (downloads PyTorch and a small embedding model on first use). Without it, DSPM falls back to a neutral alignment score — criticals are fully protected either way.
+
 ---
 
 ## Quickstart
