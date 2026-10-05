@@ -183,8 +183,17 @@ class DSPMMemory:
         """Count shared normalized non-stopword tokens."""
         return len(_content_words(left) & _content_words(right))
 
+    # FIXED (v0.1.5): memory.budget and engine.budget were independent
+    # copies — a user changing `memory.budget` saw no effect because the
+    # engine kept using its own copy (reported by a real user: "changing the
+    # budget shows the same results"). The engine budget is now synced from
+    # self.budget on every call, so both assignment styles work:
+    #   memory.budget = 100
+    #   memory.set_budget(100)
+    #   memory.engine.budget = 100   (legacy path, still honored)
     def get_context(self, query: str = "") -> str:
         """Return the compressed context string produced by the DSPM engine."""
+        self.engine.budget = self.budget
         selected, diagnostics = self.engine.compress(self.patches, query, self.turns)
         self.selected_patches = selected
         context = self.engine.build_context(selected)
@@ -201,6 +210,12 @@ class DSPMMemory:
         """Return the list of every patch currently stored in memory."""
         return list(self.patches)
 
+    # FIXED (v0.1.5): context_tokens previously summed per-patch token costs,
+    # which under-counts the newline tokens in the joined context (the same
+    # under-count fixed in the engine at v0.1.2) — stats could disagree with
+    # the actual context size the engine enforces. It now measures the real
+    # joined context string. `budget` is also reported so a changed-but-
+    # unsynced budget would be immediately visible.
     @property
     def stats(self) -> Dict[str, Any]:
         """Return a summary of memory health, selected-critical retention, and token reduction rate."""
@@ -210,7 +225,7 @@ class DSPMMemory:
         else:
             critical_selected = critical_total
         raw_tokens = sum(count_tokens(p.to_prompt_str()) for p in self.patches)
-        context_tokens = sum(count_tokens(p.to_prompt_str()) for p in self.selected_patches)
+        context_tokens = count_tokens(self._last_context) if self._last_context else 0
         crr = 100 if critical_total == 0 else int((critical_selected / critical_total) * 100)
         trr = 100 - int((context_tokens / max(1, raw_tokens)) * 100) if raw_tokens else 0
         return {
@@ -219,6 +234,7 @@ class DSPMMemory:
             "critical_total": critical_total,
             "critical_selected": critical_selected,
             "crr": crr,
+            "budget": self.budget,
             "raw_tokens": raw_tokens,
             "context_tokens": context_tokens,
             "trr": trr,
@@ -231,6 +247,13 @@ class DSPMMemory:
         self.turns = 0
         self._last_context = ""
         self.engine.reset_ema()
+
+    # ── v0.1.5: budget control ─────────────────────────────────────
+
+    def set_budget(self, budget: int) -> None:
+        """Update the token budget. Takes effect on the next get_context() call."""
+        self.budget = int(budget)
+        self.engine.budget = self.budget
 
     # ── v0.1.4: persistence — cross-session, cross-chat long-term memory ──
 

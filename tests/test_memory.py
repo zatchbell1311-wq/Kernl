@@ -126,7 +126,8 @@ def test_stats():
     mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
     stats = mem.stats
     assert isinstance(stats, dict)
-    for key in ['turns', 'total_patches', 'critical_total', 'critical_selected', 'crr', 'raw_tokens', 'context_tokens', 'trr']:
+    for key in ['turns', 'total_patches', 'critical_total', 'critical_selected', 'crr',
+                'budget', 'raw_tokens', 'context_tokens', 'trr']:
         assert key in stats
 
 
@@ -161,3 +162,37 @@ def test_patch_dataclass_manual():
     assert p.patch_type in PATCH_TYPES
     assert p.is_critical is True
     assert p.patch_id == 'x'
+
+
+# ── v0.1.5: budget bug regression tests ───────────────────────────
+# Reported by a real user: "even after changing the budget, it shows
+# the same results." Root cause: DSPMMemory.budget and engine.budget
+# were independent copies — memory.budget assignments were silently
+# ignored by the engine.
+
+def test_budget_change_takes_effect():
+    """Changing memory.budget must change the compressed output."""
+    from dspm.patch import count_tokens
+    llm = MockLLMClient()
+    mem = DSPMMemory(budget=400, llm_client=llm, model='test-model')
+    mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
+    ctx_big = mem.get_context(query='overview')
+
+    mem.budget = 60
+    ctx_small = mem.get_context(query='overview')
+
+    assert count_tokens(ctx_small) <= 60
+    assert count_tokens(ctx_big) >= count_tokens(ctx_small)
+    assert mem.stats['budget'] == 60
+
+
+def test_set_budget():
+    """set_budget() must update both memory and engine immediately."""
+    from dspm.patch import count_tokens
+    llm = MockLLMClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model')
+    mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
+    mem.set_budget(80)
+    assert mem.budget == 80
+    assert mem.engine.budget == 80
+    assert count_tokens(mem.get_context(query='overview')) <= 80
