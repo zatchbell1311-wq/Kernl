@@ -44,13 +44,23 @@ class DSPMEngine:
     )
     # Constraint subject nouns — the word that makes a bare number
     # meaningful ("timeout" in "webhook timeout 30 seconds").
-    # v0.1.9: added weekdays, month names, quarters, years — live
-    # testing showed "deadline Friday" losing "Friday" at tight budgets.
+    # v0.1.9: added weekdays, month names, quarters, years.
     _KEY_NOUNS = (
         r"(timeout|limit|rate|deadline|budget|threshold|ttl|latency|"
         r"expiry|window|quota|cap|duration|interval|retention|"
         r"cooldown|sla|uptime|fee|price|cost|"
         r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+        r"january|february|march|april|may|june|july|august|"
+        r"september|october|november|december|"
+        r"q[1-4]|20\d\d)s?"
+    )
+    # v0.1.9: temporal VALUES ("Friday", "March", "Q3", "2026") — when
+    # attached to a key noun, they ARE the constraint's value and get
+    # priority 90 (below numbers, above all nouns). Separate pattern
+    # from _KEY_NOUNS so a temporal in a non-temporal position doesn't
+    # accidentally outrank a number-adjacent word.
+    _TEMPORALS = (
+        r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
         r"january|february|march|april|may|june|july|august|"
         r"september|october|november|december|"
         r"q[1-4]|20\d\d)s?"
@@ -234,6 +244,7 @@ class DSPMEngine:
         for p in non_criticals:
             if count_tokens(self.build_context(selected_total + [p])) <= self.budget:
                 selected_total.append(p)
+                continue
         # FINAL HARD CAP on the real joined string (newline tokens included)
         while selected_total and count_tokens(self.build_context(selected_total)) > self.budget:
             non_crit = [q for q in selected_total if not q.is_critical]
@@ -281,14 +292,14 @@ class DSPMEngine:
 
     # v0.1.7: number+unit pairs are ATOMIC SPANS (weights can't guarantee
     # pairing — live testing produced both "timeout 30" and "Rate per").
-    # v0.1.9: "(was X)" replacement spans (written by memory.py's
-    # supersession) are protected at priority 60, so the revision
-    # history survives trimming alongside its value.
+    # v0.1.9: "(was X)" replacement spans protected at 60; temporal
+    # values following a key noun ("deadline Friday") get priority 90.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words. Number+unit pairs and '(was X)'
         replacement spans are atomic; selection priority: number-spans >
-        compound units > was-spans > number-adjacent words > key
-        constraint nouns > proper nouns > filler."""
+        temporal-after-key-noun (90) > was-spans (60) > compound units
+        (50) > number-adjacent words (40) > key constraint nouns (30) >
+        proper nouns (20) > filler (10)."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
@@ -327,12 +338,22 @@ class DSPMEngine:
         for j, w in enumerate(words):
             if j in claimed:
                 continue
+            w_clean = w.lower().strip(".,;)")
             if re.search(r"\d", w):
                 prio = 100                    # bare number
             elif j > 0 and re.search(r"\d", words[j - 1]):
                 prio = 40                    # number-adjacent ("requests")
-            elif re.fullmatch(self._KEY_NOUNS, w.lower().strip(".,;)")):
-                prio = 30                    # constraint subject / temporal
+            # v0.1.9: temporal VALUE directly after a key noun —
+            # "deadline Friday", "expires March", "release 2026". The
+            # temporal IS the constraint's value; outranks everything
+            # except numbers themselves.
+            elif (j > 0
+                  and re.fullmatch(self._KEY_NOUNS,
+                                   words[j - 1].lower().strip(".,;)"))
+                  and re.fullmatch(self._TEMPORALS, w_clean)):
+                prio = 90                    # temporal value of a constraint
+            elif re.fullmatch(self._KEY_NOUNS, w_clean):
+                prio = 30                    # constraint subject
             elif w[:1].isupper():
                 prio = 20                    # proper noun
             else:
