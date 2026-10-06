@@ -34,20 +34,28 @@ from dspm.patch import SemanticPatch, count_tokens
 class DSPMEngine:
     """Compression engine applying the DSPM seven-stage pipeline."""
 
-    # v0.1.7: unit words recognized for number-binding (the word
-    # immediately after a number). Compound units ("per minute") are
-    # detected separately in _trim_numeric_first.
+    # Unit words recognized for number-binding (the word immediately
+    # after a number). Compound units ("per minute") are detected
+    # separately in _trim_numeric_first.
     _UNIT_WORDS = (
         r"(ms|millisecond|milliseconds|s|sec|secs|second|seconds|"
         r"min|mins|minute|minutes|hr|hrs|hour|hours|d|day|days|"
         r"w|week|weeks|mo|month|months|y|yr|year|years|kb|mb|gb|tb|%)"
     )
-    # v0.1.7: constraint subject nouns — the word that makes a bare
-    # number meaningful ("timeout" in "webhook timeout 30 seconds").
+    # Constraint subject nouns — the word that makes a bare number
+    # meaningful ("timeout" in "webhook timeout 30 seconds").
+    # v0.1.9: added weekdays, month names, quarters, and years —
+    # live testing showed "deadline Friday" losing "Friday" at tight
+    # budgets. Deadlines are among the most common real constraints,
+    # and their temporal value deserves key-noun protection.
     _KEY_NOUNS = (
         r"(timeout|limit|rate|deadline|budget|threshold|ttl|latency|"
         r"expiry|window|quota|cap|duration|interval|retention|"
-        r"cooldown|sla|uptime|fee|price|cost)s?"
+        r"cooldown|sla|uptime|fee|price|cost|"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+        r"january|february|march|april|may|june|july|august|"
+        r"september|october|november|december|"
+        r"q[1-4]|20\d\d)s?"
     )
 
     def __init__(self, budget: int = DEFAULT_BUDGET):
@@ -103,7 +111,7 @@ class DSPMEngine:
         groups = {}
         for p in patches:
             if p.is_critical:
-                groups[id(p)] = p   # v0.1.2: never fuse criticals
+                groups[id(p)] = p   # never fuse criticals
                 continue
             groups.setdefault(p.slot_key, p)
             if p.slot_key in groups and groups[p.slot_key] != p:
@@ -228,6 +236,7 @@ class DSPMEngine:
         for p in non_criticals:
             if count_tokens(self.build_context(selected_total + [p])) <= self.budget:
                 selected_total.append(p)
+                continue
         # FINAL HARD CAP on the real joined string (newline tokens included)
         while selected_total and count_tokens(self.build_context(selected_total)) > self.budget:
             non_crit = [q for q in selected_total if not q.is_critical]
@@ -273,17 +282,16 @@ class DSPMEngine:
                 criticals.remove(worst)
         return trimmed
 
-    # FIXED (v0.1.6): units following numbers survived trimming.
-    # FIXED (v0.1.7, external review): weight-based scoring still let
-    # "timeout 30" (unit lost to tie-break) and even "Rate per" (compound
-    # unit +3 OUTRANKED its own number +2!) through at 2-word floors.
-    # Weights cannot guarantee number+unit integrity — so a number and its
-    # unit are now an ATOMIC SPAN, kept or dropped as a whole. A unit can
-    # never survive without its number, and a number never loses its unit.
+    # v0.1.7: number+unit pairs are ATOMIC SPANS (weights can't guarantee
+    # pairing — live testing produced both "timeout 30" and "Rate per").
+    # v0.1.9: "(was X)" replacement spans (written by memory.py's
+    # supersession) are protected at key-noun priority, so the revision
+    # history survives trimming alongside its value.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
-        """Trim payload to max_words. Number+unit pairs are atomic spans;
-        selection priority: number-spans > compound units > number-adjacent
-        words > key constraint nouns > proper nouns > filler."""
+        """Trim payload to max_words. Number+unit pairs and '(was X)'
+        replacement spans are atomic; selection priority: number-spans >
+        compound units > was-spans > number-adjacent words > key
+        constraint nouns > proper nouns > filler."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
@@ -293,15 +301,25 @@ class DSPMEngine:
         claimed = set()
         i = 0
         while i < len(words):
+            # v0.1.9: "(was 30 seconds)" replacement span — keep whole
+            if words[i].lower().startswith("(was"):
+                j = i
+                while j < len(words) and not words[j].endswith(")"):
+                    j += 1
+                spans.append((i, min(j, len(words) - 1), 60))
+                claimed.update(range(i, min(j, len(words) - 1) + 1))
+                i = j + 1
+                continue
             # compound unit: "per minute" / "an hour" / "a day"
             if re.fullmatch(r"per|an|a", words[i].lower()) and i + 1 < len(words) \
                     and re.fullmatch(r"(second|minute|hour|day|week|month|year)s?",
-                                     words[i + 1].lower().strip(".,;")):
+                                     words[i + 1].lower().strip(".,;)")):
                 spans.append((i, i + 1, 50))
                 claimed.update((i, i + 1)); i += 2; continue
             # number + its unit: "30 seconds", "15 minutes", "500 mb"
             if re.search(r"\d", words[i]) and i + 1 < len(words) \
-                    and re.fullmatch(self._UNIT_WORDS, words[i + 1].lower().strip(".,;")):
+                    and re.fullmatch(self._UNIT_WORDS,
+                                     words[i + 1].lower().strip(".,;)")):
                 spans.append((i, i + 1, 100))
                 claimed.update((i, i + 1)); i += 2; continue
             i += 1
@@ -315,8 +333,8 @@ class DSPMEngine:
                 prio = 100                    # bare number
             elif j > 0 and re.search(r"\d", words[j - 1]):
                 prio = 40                    # number-adjacent ("requests")
-            elif re.fullmatch(self._KEY_NOUNS, w.lower().strip(".,;")):
-                prio = 30                    # constraint subject
+            elif re.fullmatch(self._KEY_NOUNS, w.lower().strip(".,;)")):
+                prio = 30                    # constraint subject / temporal
             elif w[:1].isupper():
                 prio = 20                    # proper noun
             else:

@@ -21,12 +21,12 @@ _STOPWORDS = {
     "when", "if", "then", "than", "so", "we", "you",
 }
 
-# v0.1.3: verbs that signal a payload REVISES an earlier value. Revisions in
+# Verbs that signal a payload REVISES an earlier value. Revisions in
 # real conversations announce themselves; complementary facts do not.
-# v0.1.7: added "now", "moved" — running the README quickstart against a
-# real model showed extractors often strip "updated"/"superseded" down to
-# "webhook timeout now 10 seconds"; without "now" as a marker, the stale
-# 30s entry survived as a contradictory critical.
+# v0.1.7: added "now", "moved" — live quickstart testing showed
+# extractors often strip "updated"/"superseded" down to "timeout now
+# 10 seconds"; without "now" as a marker, the stale entry survived
+# as a contradictory critical.
 _REVISION_MARKERS = {
     "update", "updated", "change", "changed", "revise", "revised",
     "supersede", "superseded", "replace", "replaced", "instead",
@@ -81,10 +81,14 @@ class DSPMMemory:
         >>> print(context)
     """
 
-    def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None, model: str = "gpt-4o-mini", **kwargs: Any):
+    def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None, model: str = "gpt-4o-mini", dense: bool = False, **kwargs: Any):
         self.budget = budget
         self.llm_client = llm_client
         self.model = model
+        # v0.1.9: dense mode — widens the extraction funnel for
+        # fact-heavy turns (documents, research notes, specs). Off by
+        # default; conversations don't need it.
+        self.dense = dense
         self.engine = DSPMEngine(budget=budget)
         self.patches: List[SemanticPatch] = []
         self.turns = 0
@@ -96,7 +100,9 @@ class DSPMMemory:
         if self.llm_client is None:
             raise ValueError("llm_client is required to call add_turn()")
 
-        patches = extract_turn(self.llm_client, self.model, text, self.turns, recent_context=self._last_context)
+        patches = extract_turn(self.llm_client, self.model, text, self.turns,
+                               recent_context=self._last_context,
+                               dense=self.dense)
         for p in patches:
             self._merge_patch(p)
         self.turns += 1
@@ -109,7 +115,16 @@ class DSPMMemory:
     #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
     def _merge_patch(self, patch: SemanticPatch) -> None:
-        """Merge a patch into memory with duplicate suppression and critical revision supersession."""
+        """Merge a patch into memory with duplicate suppression and critical
+        revision supersession.
+
+        v0.1.9: when a revision supersedes stale entries, the REPLACED
+        value is baked into the surviving payload ("webhook timeout now
+        10 seconds (was 30 seconds)"). Live testing showed that without
+        this, aggressive trimming left the correct value but no record
+        of what it replaced — the answer model then reported 'memory
+        does not specify what it replaced'. The revision story now
+        travels WITH the value and is protected during trimming."""
         # exact duplicate suppression (same type, same payload)
         for existing in self.patches:
             if existing.patch_type == patch.patch_type and existing.payload == patch.payload:
@@ -120,12 +135,12 @@ class DSPMMemory:
                 if existing.is_critical and existing.fingerprint == patch.fingerprint:
                     return
         # critical supersession — collect ALL stale entries, then remove
+        stale = []
         if patch.is_critical:
             new_words = _content_words(patch.payload)
             new_nums = _numbers(patch.payload)
             marker = _has_revision_marker(patch.payload)
             new_head = _slot_head(patch.payload)
-            stale = []
             for existing in self.patches:
                 if not existing.is_critical:
                     continue
@@ -154,8 +169,19 @@ class DSPMMemory:
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (c2) terse cross-type
                         continue
+
+        # v0.1.9: bake replaced values into the surviving payload
+        if stale and patch.is_critical:
+            replaced_vals = []
             for s in stale:
-                self.patches.remove(s)
+                s_nums = [w for w in s.payload.split() if re.search(r"\d", w)]
+                if s_nums:
+                    replaced_vals.append(s_nums[0])
+            if replaced_vals and "(was" not in patch.payload:
+                patch.payload = f"{patch.payload} (was {' then '.join(replaced_vals[:2])})"
+
+        for s in stale:
+            self.patches.remove(s)
         self.patches.append(patch)
 
     def _jaccard(self, left: str, right: str) -> float:
@@ -208,6 +234,7 @@ class DSPMMemory:
             "critical_selected": critical_selected,
             "crr": crr,
             "budget": self.budget,
+            "dense": self.dense,
             "raw_tokens": raw_tokens,
             "context_tokens": context_tokens,
             "trr": trr,

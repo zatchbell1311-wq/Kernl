@@ -91,7 +91,36 @@ def parse_extraction(raw_text: str) -> List[Dict[str, Any]]:
     return []
 
 
-def _build_system_prompt() -> str:
+# v0.1.9: density detection for dense mode. A turn with many numeric
+# facts (documents, specs, research notes) needs a wider extraction
+# funnel than a conversational turn; the fixed 5-patch cap was found
+# (in live document testing) to capture only a fraction of the facts.
+def _numeric_density(turn_text: str) -> float:
+    """Fraction of words containing digits. 0.05 ≈ one number per 20 words."""
+    words = turn_text.split()
+    if not words:
+        return 0.0
+    return sum(1 for w in words if re.search(r"\d", w)) / len(words)
+
+
+def _build_system_prompt(dense: bool = False) -> str:
+    if dense:
+        return (
+            "You are a semantic patch extractor. Extract semantic patches from the turn as a raw JSON array. "
+            "This is FACT-DENSE content (document/spec/notes): extract up to 10 patches, prioritizing every "
+            "distinct numeric value, threshold, date, and named specification — each with its exact value. "
+            "Each element must be a JSON object with exactly these keys: "
+            '"patch_type" (one of: constraint, decision, code, equation, entity, structure), '
+            '"payload" (an 8-20 word note preserving every number, version, threshold AND UNIT verbatim; '
+            'when the turn revises an earlier value, KEEP the revision verb in the payload, '
+            'e.g. "webhook timeout updated to 10 seconds" not just "webhook timeout 10 seconds"), '
+            '"patch_id" (a unique string), '
+            '"dependencies" (a list of patch_ids this depends on; empty list if none). '
+            "Rules: constraint max 2 per turn. decision max 2 per turn, extract only the NEW value for revisions. "
+            "code holds implementation detail. equation holds formulas and numeric results. "
+            "entity holds named things. structure holds schemas and workflows. "
+            "Reply with a raw JSON array only — no markdown fences, no commentary."
+        )
     return (
         "You are a semantic patch extractor. Extract at most 5 semantic patches from the turn as a raw JSON array. "
         "Each element must be a JSON object with exactly these keys: "
@@ -109,12 +138,18 @@ def _build_system_prompt() -> str:
     )
 
 
-def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent_context: str = '') -> List[SemanticPatch]:
-    """Extract semantic patches from a conversation turn using an LLM client."""
+def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
+                 recent_context: str = '', dense: bool = False) -> List[SemanticPatch]:
+    """Extract semantic patches from a conversation turn using an LLM client.
+
+    v0.1.9: `dense=True` (or auto when numeric density is high and dense
+    mode is requested by the caller) widens the extraction funnel — more
+    patches allowed, constraint/decision caps relaxed — for fact-heavy
+    turns where the standard 5-patch cap loses most numeric facts."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 
-    system_prompt = _build_system_prompt()
+    system_prompt = _build_system_prompt(dense=dense)
     user_content = (
         f"Recent context:\n{recent_context}\n\nTurn {turn_index}:\n{turn_text}"
         if recent_context else f"Turn {turn_index}:\n{turn_text}"
@@ -124,9 +159,9 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int, recent
         {"role": "user", "content": user_content},
     ]
 
-    # FIXED (v0.1.6): retry with backoff on transient errors (429 rate
-    # limits, 5xx, network). Non-retryable HTTP errors (400/401/403/404)
-    # raise immediately — retrying a bad key or dead model is pointless.
+    # Retry with backoff on transient errors (429 rate limits, 5xx,
+    # network). Non-retryable HTTP errors (400/401/403/404) raise
+    # immediately — retrying a bad key or dead model is pointless.
     NON_RETRYABLE = {400, 401, 403, 404}
     response = None
     last_exc = None
