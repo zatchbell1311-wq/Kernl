@@ -206,7 +206,8 @@ def test_cross_type_revision_three_shared_words():
                                  'Updated webhook timeout changed to 10 seconds instead', []))
     crits = [p.payload for p in m.critical_patches]
     assert len(crits) == 1, f"expected 1 critical, got {crits}"
-    assert '10' in crits[0] and '30' not in crits[0]
+    assert '10' in crits[0]
+    assert '(was' in crits[0] and '30' in crits[0]
 
 
 def test_cross_type_complementary_facts_still_safe():
@@ -340,4 +341,51 @@ def test_now_marker_supersedes():
                                  'webhook timeout now 10 seconds', []))
     crits = [p.payload for p in m.critical_patches]
     assert len(crits) == 1, f"stale 30s survived 'now' revision: {crits}"
-    assert '10' in crits[0] and '30' not in crits[0]
+    assert '10' in crits[0]
+    assert '(was' in crits[0] and '30' in crits[0]
+
+
+# ── v0.1.9: live-testing regression tests ─────────────────────────
+
+def test_replaced_value_baked_into_payload():
+    """v0.1.9: when a revision supersedes a stale critical, the replaced
+    value is baked into the surviving payload as '(was X)' so even
+    heavily trimmed contexts can state what the current value replaced."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'webhook timeout now 10 seconds', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1
+    assert '10' in crits[0], f"current value missing: {crits}"
+    assert '(was' in crits[0] and '30' in crits[0], \
+        f"replaced value not baked in: {crits}"
+
+
+def test_was_span_survives_tight_trim():
+    """v0.1.9: the '(was X)' span is atomic in trimming — the revision
+    history survives alongside the current value even at tiny budgets."""
+    m = DSPMMemory(budget=34)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'webhook timeout now 10 seconds', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'constraint',
+                                 'PCI-DSS compliant, max fee 0.5%, deadline Friday', []))
+    ctx = m.get_context(query='webhook and hard rules')
+    assert '10' in ctx, f"current value lost: {ctx!r}"
+    assert 'was' in ctx.lower() and '30' in ctx, f"replacement history lost: {ctx!r}"
+
+
+def test_temporal_key_noun_survives_trim():
+    """v0.1.9: weekdays/months/quarters are key nouns — 'deadline Friday'
+    must keep 'Friday' at tight budgets (previously trimmed away)."""
+    m = DSPMMemory(budget=18)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'PCI-DSS compliant, max fee 0.5%, deadline Friday', []))
+    ctx = m.get_context(query='hard rules and deadlines')
+    if 'deadline' in ctx.lower():
+        assert 'friday' in ctx.lower(), f"'Friday' trimmed from deadline: {ctx!r}"

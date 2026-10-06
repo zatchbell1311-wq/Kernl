@@ -91,10 +91,10 @@ def parse_extraction(raw_text: str) -> List[Dict[str, Any]]:
     return []
 
 
-# v0.1.9: density detection for dense mode. A turn with many numeric
-# facts (documents, specs, research notes) needs a wider extraction
-# funnel than a conversational turn; the fixed 5-patch cap was found
-# (in live document testing) to capture only a fraction of the facts.
+# v0.1.9: density metric for dense mode. A turn with many numeric facts
+# (documents, specs, research notes) needs a wider extraction funnel
+# than a conversational turn; the fixed 5-patch cap was shown in live
+# document testing to capture only a fraction of the facts.
 def _numeric_density(turn_text: str) -> float:
     """Fraction of words containing digits. 0.05 ≈ one number per 20 words."""
     words = turn_text.split()
@@ -142,10 +142,9 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
                  recent_context: str = '', dense: bool = False) -> List[SemanticPatch]:
     """Extract semantic patches from a conversation turn using an LLM client.
 
-    v0.1.9: `dense=True` (or auto when numeric density is high and dense
-    mode is requested by the caller) widens the extraction funnel — more
-    patches allowed, constraint/decision caps relaxed — for fact-heavy
-    turns where the standard 5-patch cap loses most numeric facts."""
+    v0.1.9: `dense=True` widens the extraction funnel — more patches
+    allowed, constraint/decision caps relaxed — for fact-heavy turns
+    where the standard 5-patch cap loses most numeric facts."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 

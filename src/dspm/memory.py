@@ -23,10 +23,8 @@ _STOPWORDS = {
 
 # Verbs that signal a payload REVISES an earlier value. Revisions in
 # real conversations announce themselves; complementary facts do not.
-# v0.1.7: added "now", "moved" — live quickstart testing showed
-# extractors often strip "updated"/"superseded" down to "timeout now
-# 10 seconds"; without "now" as a marker, the stale entry survived
-# as a contradictory critical.
+# v0.1.7: added "now", "moved" — live testing showed extractors often
+# strip "updated"/"superseded" down to "timeout now 10 seconds".
 _REVISION_MARKERS = {
     "update", "updated", "change", "changed", "revise", "revised",
     "supersede", "superseded", "replace", "replaced", "instead",
@@ -81,13 +79,13 @@ class DSPMMemory:
         >>> print(context)
     """
 
-    def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None, model: str = "gpt-4o-mini", dense: bool = False, **kwargs: Any):
+    def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None,
+                 model: str = "gpt-4o-mini", dense: bool = False, **kwargs: Any):
         self.budget = budget
         self.llm_client = llm_client
         self.model = model
-        # v0.1.9: dense mode — widens the extraction funnel for
-        # fact-heavy turns (documents, research notes, specs). Off by
-        # default; conversations don't need it.
+        # v0.1.9: dense mode — wider extraction funnel for fact-heavy
+        # turns (documents, specs, research notes). Off by default.
         self.dense = dense
         self.engine = DSPMEngine(budget=budget)
         self.patches: List[SemanticPatch] = []
@@ -114,17 +112,15 @@ class DSPMMemory:
     #   (b)  same type + >=4 shared words + IDENTICAL number sets (restatement)
     #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
+    #
+    # v0.1.9: when a revision supersedes stale entries, the REPLACED
+    # value is baked into the surviving payload as "(was X)" — live
+    # testing showed aggressive trimming otherwise left the correct value
+    # with no record of what it replaced. The (was X) span is atomic in
+    # trimming (see engine), so the full revision story survives.
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical
-        revision supersession.
-
-        v0.1.9: when a revision supersedes stale entries, the REPLACED
-        value is baked into the surviving payload ("webhook timeout now
-        10 seconds (was 30 seconds)"). Live testing showed that without
-        this, aggressive trimming left the correct value but no record
-        of what it replaced — the answer model then reported 'memory
-        does not specify what it replaced'. The revision story now
-        travels WITH the value and is protected during trimming."""
+        revision supersession."""
         # exact duplicate suppression (same type, same payload)
         for existing in self.patches:
             if existing.patch_type == patch.patch_type and existing.payload == patch.payload:

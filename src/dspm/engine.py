@@ -44,10 +44,8 @@ class DSPMEngine:
     )
     # Constraint subject nouns — the word that makes a bare number
     # meaningful ("timeout" in "webhook timeout 30 seconds").
-    # v0.1.9: added weekdays, month names, quarters, and years —
-    # live testing showed "deadline Friday" losing "Friday" at tight
-    # budgets. Deadlines are among the most common real constraints,
-    # and their temporal value deserves key-noun protection.
+    # v0.1.9: added weekdays, month names, quarters, years — live
+    # testing showed "deadline Friday" losing "Friday" at tight budgets.
     _KEY_NOUNS = (
         r"(timeout|limit|rate|deadline|budget|threshold|ttl|latency|"
         r"expiry|window|quota|cap|duration|interval|retention|"
@@ -156,7 +154,7 @@ class DSPMEngine:
 
     def _causal_pruning(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
         """T4: remove intermediate non-critical nodes from the dependency graph."""
-        kept_ids = {p.patch_id for p in patches}
+        kept_ids = {p.patch_id: p for p in patches}
         children = {}
         for p in patches:
             for d in p.dependencies:
@@ -236,7 +234,6 @@ class DSPMEngine:
         for p in non_criticals:
             if count_tokens(self.build_context(selected_total + [p])) <= self.budget:
                 selected_total.append(p)
-                continue
         # FINAL HARD CAP on the real joined string (newline tokens included)
         while selected_total and count_tokens(self.build_context(selected_total)) > self.budget:
             non_crit = [q for q in selected_total if not q.is_critical]
@@ -285,7 +282,7 @@ class DSPMEngine:
     # v0.1.7: number+unit pairs are ATOMIC SPANS (weights can't guarantee
     # pairing — live testing produced both "timeout 30" and "Rate per").
     # v0.1.9: "(was X)" replacement spans (written by memory.py's
-    # supersession) are protected at key-noun priority, so the revision
+    # supersession) are protected at priority 60, so the revision
     # history survives trimming alongside its value.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words. Number+unit pairs and '(was X)'
@@ -306,9 +303,10 @@ class DSPMEngine:
                 j = i
                 while j < len(words) and not words[j].endswith(")"):
                     j += 1
-                spans.append((i, min(j, len(words) - 1), 60))
-                claimed.update(range(i, min(j, len(words) - 1) + 1))
-                i = j + 1
+                end = min(j, len(words) - 1)
+                spans.append((i, end, 60))
+                claimed.update(range(i, end + 1))
+                i = end + 1
                 continue
             # compound unit: "per minute" / "an hour" / "a day"
             if re.fullmatch(r"per|an|a", words[i].lower()) and i + 1 < len(words) \
