@@ -50,3 +50,14 @@ MAX_PAYLOAD_CHARS = 200
 # fact-dense document chunk loses most numeric facts at extraction (the
 # 70%/85% document-test failure mode).
 DENSE_AUTO_THRESHOLD = 0.05
+
+# v0.1.11: extraction output budget, in completion tokens.
+# v0.1.0–v0.1.10 hardcoded 2000 inside extract_turn. Live document testing
+# (three comparison rounds with gpt-oss models) showed reasoning models
+# spend output tokens on chain-of-thought BEFORE the visible content — a
+# 2000-token budget can be consumed entirely by reasoning, returning HTTP
+# 200 with EMPTY content and silently leaving the chunk with 0 patches.
+# 4000 covers low-effort reasoning plus a full 10-patch dense extraction.
+# Override per call with extract_turn(max_tokens=...) for providers that
+# cap completions below this.
+EXTRACT_MAX_TOKENS = 4000

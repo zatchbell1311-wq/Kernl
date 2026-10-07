@@ -4,7 +4,7 @@
 
 100% critical retention across our benchmark suite — under impossibly small budgets, criticals are trimmed to their word floor and dropped only as a documented last resort.
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.10-blue)](https://pypi.org/project/dspm-memory/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.11-blue)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
@@ -137,7 +137,7 @@ Save files are portable JSON, written atomically (a crash mid-save can't corrupt
 - Under budget pressure, payloads are trimmed numbers-first — and units bind to their numbers (`30 seconds` stays `30 seconds`, never just `30`)
 - When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old — including cross-type revisions (a constraint revised by a decision) and terse patches
 - A critical is only dropped as a last resort: every critical already at its 2-word floor and budget still cannot hold them
-- Transient API failures (rate limits, 5xx) are retried automatically with backoff — three attempts before the error surfaces
+- Transient API failures (rate limits, 5xx) and empty responses from reasoning models are retried automatically with backoff — three attempts before the error surfaces; gpt-oss extraction runs at low reasoning effort by default
 
 **Ablation result:** Removing the shadow-selection mechanism collapses CRR from 100% to 37.9%, isolating the guarantee to a single identifiable component.
 
@@ -219,6 +219,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 | Version | Changes |
 |---------|---------|
+| 0.1.11 | **Extractor hardening for reasoning models** (found in three rounds of live document testing): extraction output budget raised 2000 → 4000 tokens and made overridable (`extract_turn(max_tokens=...)`); HTTP-200-but-empty responses — reasoning models burning the budget on chain-of-thought, which silently produced 0-patch chunks — are now retried with backoff; gpt-oss models automatically extract at low reasoning effort, with graceful fallback if the provider (400) or a custom client (TypeError) rejects the parameter. 6 regression tests (42 total). |
 | 0.1.10 | Auto-dense extraction: fact-heavy turns (numeric density ≥ 0.05) automatically get the dense extraction funnel (up to 10 patches) — v0.1.9's density detector was never wired, so document runs silently used the 5-patch funnel and lost most numeric facts at extraction (live check: a results paragraph now captures 7/7 benchmark numbers, previously 2–3). Dense prompt hardened: experimental/config parameters are no longer misclassified as constraints; each numeric result gets its own patch; tables extract one patch per row. New `add_document()` — sentence-aware document ingestion. Recency in utility scoring now actually decays (was a constant). Corrupted notebook files return 0 on `load()` instead of raising. Fixed a vacuous budget test. 6 new tests (36 total). |
 | 0.1.9 | Replaced values baked into superseded payloads as `(was X)` spans, atomic during trimming — the full revision story (current value + what it replaced) survives even at tiny budgets. Temporal values (weekdays/months/quarters/years) directly after key nouns survive trimming at priority 90. Dense-mode extraction for fact-heavy turns (manual `dense=True` flag). 3 new tests (30 total). |
 | 0.1.8 | Retry wording corrected — 0.1.7's wheel shipped the previous wording, caught by post-build wheel verification check immediately after upload. No code changes. |

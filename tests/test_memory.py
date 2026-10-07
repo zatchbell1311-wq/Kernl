@@ -85,6 +85,28 @@ class PromptCapturingClient:
         self.chat = Chat()
 
 
+# v0.1.11: records the FULL kwargs of every LLM call so tests can assert
+# on what the extractor actually sent (max_tokens, reasoning_effort).
+class KwargCapturingClient:
+    def __init__(self, content=None):
+        self.content = content or json.dumps([
+            {"patch_type": "entity", "payload": "Stripe.", "patch_id": "x"}
+        ])
+        self.calls = []
+        owner = self
+
+        class Completions:
+            @staticmethod
+            def create(**kwargs):
+                owner.calls.append(kwargs)
+                return MockResponse(owner.content)
+
+        class Chat:
+            completions = Completions()
+
+        self.chat = Chat()
+
+
 def test_add_turn_extracts_patches():
     llm = MockLLMClient()
     mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
@@ -473,3 +495,140 @@ def test_recency_prefers_recent_noncritical():
     ctx = m.get_context(query='user profiles')
     assert 'Beta' in ctx, f"recent patch lost (recency not decaying?): {ctx!r}"
     assert 'Alpha' not in ctx, f"older patch beat the recent one: {ctx!r}"
+
+
+# ── v0.1.11: reasoning-model extractor hardening regression tests ─
+# From three rounds of live document testing: reasoning models (gpt-oss)
+# spend output tokens on chain-of-thought BEFORE the answer, so a
+# 2000-token budget could return HTTP 200 with EMPTY content — and
+# v0.1.10 only retried on exceptions, so the chunk silently extracted
+# 0 patches (the missing-numbers failure mode).
+
+def test_extract_retries_on_empty_content():
+    """v0.1.11: HTTP 200 with EMPTY content must retry with backoff.
+    v0.1.10 accepted it silently after one call — 0-patch chunks."""
+    from dspm.extractor import extract_turn
+    calls = {'n': 0}
+
+    class EmptyThenContentClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls['n'] += 1
+                    if calls['n'] < 3:
+                        return MockResponse("")   # reasoning burned the budget
+                    return MockResponse(json.dumps(
+                        [{'patch_type': 'entity', 'payload': 'Stripe', 'patch_id': 'x'}]))
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    patches = extract_turn(EmptyThenContentClient(), 'test-model', 'We use Stripe.', 0)
+    assert calls['n'] == 3, f"empty content must be retried; got {calls['n']} call(s)"
+    assert len(patches) == 1 and patches[0].payload == 'Stripe'
+
+
+def test_extract_all_empty_returns_zero_patches():
+    """v0.1.11 guard: if every attempt returns empty content, the turn
+    degrades gracefully to 0 patches — add_turn() must never crash on a
+    degraded (but successful) response."""
+    from dspm.extractor import extract_turn
+    calls = {'n': 0}
+
+    class AlwaysEmptyClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls['n'] += 1
+                    return MockResponse("")
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    patches = extract_turn(AlwaysEmptyClient(), 'test-model', 'We use Stripe.', 0)
+    assert calls['n'] == 3
+    assert patches == []
+
+
+def test_reasoning_effort_auto_for_gpt_oss():
+    """v0.1.11: gpt-oss models automatically get reasoning_effort="low"
+    (extraction is structured output, not a reasoning task) and the
+    raised output budget EXTRACT_MAX_TOKENS."""
+    from dspm.extractor import extract_turn
+    from dspm.config import EXTRACT_MAX_TOKENS
+    llm = KwargCapturingClient()
+    extract_turn(llm, 'openai/gpt-oss-120b', 'We use Stripe.', 0)
+    assert len(llm.calls) == 1
+    assert llm.calls[0].get('reasoning_effort') == 'low'
+    assert llm.calls[0]['max_tokens'] == EXTRACT_MAX_TOKENS
+
+
+def test_no_reasoning_effort_for_standard_models():
+    """v0.1.11 guard: non-gpt-oss models must NOT receive the
+    reasoning_effort kwarg — providers reject unknown parameters with a
+    non-retryable 400."""
+    from dspm.extractor import extract_turn
+    llm = KwargCapturingClient()
+    extract_turn(llm, 'llama-3.1-8b-instant', 'We use Stripe.', 0)
+    assert len(llm.calls) == 1
+    assert 'reasoning_effort' not in llm.calls[0]
+
+
+def test_reasoning_effort_rejection_falls_back():
+    """v0.1.11: a 400 that arrives WHILE reasoning_effort was sent may be
+    the provider rejecting the kwarg — it must be stripped and retried,
+    not treated as fatal (400 is otherwise non-retryable)."""
+    from dspm.extractor import extract_turn
+    calls = []
+
+    class RejectingKwargClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    if len(calls) == 1:
+                        e = Exception('Unsupported parameter: reasoning_effort')
+                        e.status_code = 400
+                        raise e
+                    return MockResponse(json.dumps(
+                        [{'patch_type': 'entity', 'payload': 'Stripe', 'patch_id': 'x'}]))
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    patches = extract_turn(RejectingKwargClient(), 'openai/gpt-oss-120b', 'We use Stripe.', 0)
+    assert len(patches) == 1
+    assert len(calls) == 2
+    assert calls[0].get('reasoning_effort') == 'low'
+    assert 'reasoning_effort' not in calls[1]
+
+
+def test_custom_client_typeerror_falls_back():
+    """v0.1.11: a custom OpenAI-compatible client whose create() doesn't
+    accept reasoning_effort raises TypeError — the kwarg is stripped and
+    the call retried, keeping the package's any-client-object promise."""
+    from dspm.extractor import extract_turn
+    calls = []
+
+    class NoKwargClient:
+        def __init__(self):
+            class C:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    if 'reasoning_effort' in kwargs:
+                        raise TypeError(
+                            "create() got an unexpected keyword argument 'reasoning_effort'")
+                    return MockResponse(json.dumps(
+                        [{'patch_type': 'entity', 'payload': 'Stripe', 'patch_id': 'x'}]))
+            class Ch:
+                completions = C()
+            self.chat = Ch()
+
+    patches = extract_turn(NoKwargClient(), 'openai/gpt-oss-20b', 'We use Stripe.', 0)
+    assert len(patches) == 1
+    assert len(calls) == 2
+    assert 'reasoning_effort' not in calls[1]

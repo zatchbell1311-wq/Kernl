@@ -8,9 +8,18 @@ v0.1.10: `numeric_density` is now public (memory.add_turn calls it to
 auto-enable dense mode for fact-heavy turns), and the dense-mode prompt
 is hardened against two document-mode failure modes found in live
 testing: experimental/config parameters misclassified as constraints
-(fake criticals consuming the protected budget), and multiple
-statistics merged into single payloads (numbers lost before any
-compression stage ever ran).
+(fake criticals consuming the protected budget), and multiple statistics
+merged into single payloads (numbers lost before any compression stage
+ever ran).
+
+v0.1.11: extractor hardening for reasoning models, from three rounds of
+live document testing: the output budget rises 2000 -> 4000 tokens
+(reasoning models spend output tokens on chain-of-thought before the
+answer), HTTP-200-but-empty responses are retried like transient errors
+(previously only exceptions retried, so an empty response silently
+produced a 0-patch chunk), and gpt-oss models automatically run at low
+reasoning effort — with graceful fallbacks if the provider or a custom
+client rejects the reasoning_effort kwarg.
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from dspm.patch import SemanticPatch
-from dspm.config import PATCH_TYPES
+from dspm.config import PATCH_TYPES, EXTRACT_MAX_TOKENS
 
 
 def _strip_code_fences(text: str) -> str:
@@ -101,8 +110,8 @@ def parse_extraction(raw_text: str) -> List[Dict[str, Any]]:
 
 # v0.1.10: renamed from _numeric_density and made PUBLIC — memory.add_turn
 # now calls it to auto-enable dense mode for fact-heavy turns. It was dead
-# code in v0.1.9 (defined but never called): the 70%/85% document tests ran
-# the standard 5-patch funnel unless the user remembered dense=True.
+# code in v0.1.9 (defined but never called): the manual dense flag was too
+# easy to forget, and document runs silently used the 5-patch funnel.
 def numeric_density(turn_text: str) -> float:
     """Fraction of words containing digits. 0.05 ≈ one number per 20 words."""
     words = turn_text.split()
@@ -162,14 +171,26 @@ def _build_system_prompt(dense: bool = False) -> str:
 
 
 def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
-                 recent_context: str = '', dense: bool = False) -> List[SemanticPatch]:
+                 recent_context: str = '', dense: bool = False,
+                 max_tokens: Optional[int] = None,
+                 reasoning_effort: Optional[str] = None) -> List[SemanticPatch]:
     """Extract semantic patches from a conversation turn using an LLM client.
 
     `dense=True` widens the extraction funnel — more patches allowed,
     constraint/decision caps relaxed — for fact-heavy turns where the
-    standard 5-patch cap loses most numeric facts. v0.1.10:
-    memory.add_turn decides this automatically via numeric_density();
-    callers may still force it with the flag."""
+    standard 5-patch cap loses most numeric facts. memory.add_turn
+    decides this automatically via numeric_density(); callers may still
+    force it with the flag.
+
+    v0.1.11 parameters (both optional, fully backward compatible):
+      max_tokens — output budget; defaults to config.EXTRACT_MAX_TOKENS
+                   (4000). Pass a lower value for providers that cap
+                   completion tokens below 4000.
+      reasoning_effort — None (default) auto-detects: "low" for gpt-oss
+                   models (extraction is a structured-output task, not a
+                   reasoning task), nothing for other models. Pass
+                   "low"/"medium"/"high" to force it for any model that
+                   supports the parameter."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 
@@ -183,26 +204,63 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
         {"role": "user", "content": user_content},
     ]
 
-    # Retry with backoff on transient errors (429 rate limits, 5xx,
-    # network). Non-retryable HTTP errors (400/401/403/404) raise
-    # immediately — retrying a bad key or dead model is pointless.
+    # v0.1.11: build the request kwargs. reasoning_effort is only sent
+    # when explicitly requested or auto-detected for gpt-oss models —
+    # other providers reject unknown kwargs with a non-retryable 400.
+    if max_tokens is None:
+        max_tokens = EXTRACT_MAX_TOKENS
+    request_kwargs = {"max_tokens": max_tokens}
+    if reasoning_effort is None and "gpt-oss" in model.lower():
+        reasoning_effort = "low"
+    if reasoning_effort:
+        request_kwargs["reasoning_effort"] = reasoning_effort
+
+    # v0.1.11 retry loop. Three failure classes now retry (up to 3
+    # attempts, 2s/4s backoff between them):
+    #   1. transient exceptions (429 rate limits, 5xx, network) — as before
+    #   2. HTTP 200 with EMPTY content — NEW: reasoning models can burn
+    #      the whole output budget on chain-of-thought and return no
+    #      text; v0.1.10 accepted this silently, producing 0-patch
+    #      chunks (the missing-numbers failure in live document testing)
+    #   3. rejection of our reasoning_effort kwarg — NEW: a 400 while the
+    #      kwarg is set, or a TypeError from a custom client whose
+    #      create() doesn't accept it, strips the kwarg and retries once
+    #      before treating the error as fatal
+    # Non-retryable errors (400/401/403/404, outside the kwarg caveat)
+    # still raise immediately — retrying a bad key or dead model is
+    # pointless. If every attempt yields empty content, the turn degrades
+    # gracefully to 0 patches instead of crashing add_turn().
     NON_RETRYABLE = {400, 401, 403, 404}
     response = None
     last_exc = None
+    raw = ""
     for attempt in range(3):
         try:
             response = llm_client.chat.completions.create(
-                model=model, messages=messages, temperature=0.0, max_tokens=2000)
-            break
+                model=model, messages=messages, temperature=0.0,
+                **request_kwargs)
+            # v0.1.11: reading the response INSIDE the try also makes odd
+            # response shapes (missing .choices/.message) retryable
+            # instead of crashing after the loop.
+            raw = (response.choices[0].message.content or "").strip()
+            if raw:
+                break
         except Exception as e:
             last_exc = e
-            if getattr(e, 'status_code', None) in NON_RETRYABLE:
+            code = getattr(e, 'status_code', None)
+            if code in NON_RETRYABLE:
+                if request_kwargs.get("reasoning_effort") and code == 400:
+                    request_kwargs.pop("reasoning_effort")
+                    continue
                 raise
-            time.sleep(2 * (attempt + 1))   # 2s, 4s
+            if request_kwargs.get("reasoning_effort") and isinstance(e, TypeError):
+                request_kwargs.pop("reasoning_effort")
+                continue
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))   # 2s, 4s — between attempts only
     if response is None:
         raise last_exc
 
-    raw = response.choices[0].message.content or ""
     parsed = parse_extraction(raw)
 
     patches: List[SemanticPatch] = []
