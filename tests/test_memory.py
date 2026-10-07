@@ -658,7 +658,7 @@ def test_revision_of_revision_keeps_history():
     assert '(was 30)' in first[0], f"first revision baked wrong: {first[0]!r}"
     # a restatement of the SAME revision arrives (assistant confirming)
     m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
-                                 'Webhook timeout updated to 10 seconds, '
+                                 'Webhook Timeout updated to 10 seconds, '
                                  'superseding previous 30 seconds value', []))
     crits = [p.payload for p in m.critical_patches]
     assert len(crits) == 1, f"restatement should supersede: {crits}"
@@ -718,3 +718,31 @@ def test_revision_chain_bakes_full_history():
     assert '120' in crits[0], f"current value missing: {crits[0]!r}"
     assert '300' in crits[0] and '60' in crits[0], \
         f"full revision lineage not chained: {crits[0]!r}"
+
+
+# ── v0.1.13: value-directive classification regression test ──────
+# From the live webhook rematch (round 2): 'webhook timeout set to 30
+# seconds' — a value DIRECTIVE — was classified as [CODE], because the
+# v0.1.10 config-≠-constraint rule (written from document-mode
+# evidence) pattern-matched it as a 'configuration parameter'. The 30
+# then never entered the critical lineage, so the revision history had
+# nothing to bake. Auto-dense routes number-bearing conversation turns
+# through the dense prompt — both prompts must be safe in both modes.
+
+def test_prompt_value_directives_are_decisions():
+    """v0.1.13: both prompts must classify speaker value directives
+    ('set the timeout to 30 seconds', 'updated to 10 seconds') as
+    DECISIONS, not code — even when the parameter sounds like
+    configuration. The dense prompt additionally names the
+    directive-vs-description distinction, and the document-mode config
+    rule must survive the refinement."""
+    from dspm.extractor import _build_system_prompt
+    for dense in (True, False):
+        prompt = _build_system_prompt(dense=dense)
+        assert 'is a DECISION' in prompt, \
+            f"dense={dense}: value directives must be classified as decisions"
+    dense_prompt = _build_system_prompt(dense=True)
+    assert 'DIRECTIVES' in dense_prompt, \
+        "dense prompt lacks the directive-vs-description rule"
+    assert 'NOT constraints' in dense_prompt, \
+        "dense prompt lost the config-description rule in the refinement"

@@ -4,7 +4,7 @@
 >
 > 100% critical retention across our benchmark suite — under impossibly small budgets, criticals are trimmed to their word floor and dropped only as a documented last resort.
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.12-blue)](https://pypi.org/project/dspm-memory/)
+[![PyPI version](https://img.shields.io/pypi/v/dspm-memory?label=pypi&cacheSeconds=0)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
@@ -248,6 +248,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 | Version | Changes |
 |---------|---------|
+| 0.1.13 | **Value directives are decisions** (live conversation-mode finding): 'set the webhook timeout to 30 seconds' was classified as code — the v0.1.10 config-≠-constraint rule, written for document mode, over-applied to speaker directives, so the replaced value never entered the critical lineage and the revision history had nothing to bake. Both prompts now distinguish value DIRECTIVES ('set X to Y', 'change X to Y' — always decisions) from detached configuration DESCRIPTIONS (a document reporting its own settings — code/structure). New release rule: extraction-layer changes require BOTH live smoke gates (document + conversation) before shipping; adds `scripts/smoke_conversation.py`. 1 regression test (46 total). |
 | 0.1.12 | **Revision stories survive supersession and starvation** (live webhook-rematch findings): the (was X) baking is history-aware — a stale patch that is itself a revision gives up its history when restated (`(was 30)`, not the wrong `(was 10)`) and chains full lineages (`(was 300 then 60)`); payloads carrying `(was X)` have a 3-word floor, and at that floor trimming returns the minimal story `10 (was 30)` — current value plus history — instead of a valueless `10 seconds`. 3 regression tests (45 total). |
 | 0.1.11 | **Extractor hardening for reasoning models** (found in live document testing, 3 comparison rounds): extraction output budget raised 2000 → 4000 tokens and made overridable (`extract_turn(max_tokens=...)`); HTTP-200-but-empty responses — reasoning models burning the budget on chain-of-thought, which silently produced 0-patch chunks — are now retried with backoff; gpt-oss models automatically extract at low reasoning effort, with graceful fallback if the provider (400) or a custom client (TypeError) rejects the parameter. 6 regression tests (42 total). |
 | 0.1.10 | **Auto-dense extraction:** fact-heavy turns (numeric density ≥ 0.05) automatically get the dense extraction funnel (up to 10 patches) — v0.1.9's density detector was never wired, so document runs silently used the 5-patch funnel and lost most numeric facts at extraction (live check: a results paragraph now captures 7/7 benchmark numbers, previously 2–3). Dense prompt hardened: experimental/config parameters are no longer misclassified as constraints; each numeric result gets its own patch; tables extract one patch per row. New `add_document()` — sentence-aware document ingestion. Recency in utility scoring now actually decays (was a constant). Corrupted notebook files return 0 on `load()` instead of raising. Fixed a vacuous budget test. 6 new tests (36 total). |

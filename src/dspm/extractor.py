@@ -20,6 +20,16 @@ answer), HTTP-200-but-empty responses are retried like transient errors
 produced a 0-patch chunk), and gpt-oss models automatically run at low
 reasoning effort — with graceful fallbacks if the provider or a custom
 client rejects the reasoning_effort kwarg.
+
+v0.1.13: value directives are decisions. A live conversation-mode test
+showed 'webhook timeout set to 30 seconds' classified as [CODE] — the
+v0.1.10 config-≠-constraint rule (written from document-mode evidence)
+over-applied to speaker directives, so the replaced value never entered
+the critical lineage and the revision history had nothing to bake. Both
+prompts now distinguish value DIRECTIVES (always decisions) from
+detached configuration DESCRIPTIONS (code/structure). New live gate:
+scripts/smoke_conversation.py — extraction-layer changes now require
+BOTH smoke tests green before release.
 """
 
 from __future__ import annotations
@@ -127,6 +137,16 @@ def numeric_density(turn_text: str) -> float:
 #   - one numeric result per payload (multiple stats per payload meant
 #     the 200-char cap or trimming destroyed the rest)
 #   - tables: one patch per row (results rows were summarized away)
+#
+# v0.1.13: the config rule is refined after a live conversation-mode
+# failure (webhook rematch, round 2): 'webhook timeout set to 30 seconds'
+# — a value DIRECTIVE — was classified as [CODE] because it pattern-
+# matched 'configuration parameter', so the 30 never entered the
+# critical lineage and the (was X) baking had nothing to carry. The rule
+# now distinguishes SPEAKER DIRECTIVES (decisions, always) from DETACHED
+# CONFIGURATION DESCRIPTIONS (a document reporting its own settings —
+# code/structure). Auto-dense routes number-bearing conversation turns
+# through this dense prompt, so it must be safe in BOTH modes.
 def _build_system_prompt(dense: bool = False) -> str:
     if dense:
         return (
@@ -141,10 +161,15 @@ def _build_system_prompt(dense: bool = False) -> str:
             '"patch_id" (a unique string), '
             '"dependencies" (a list of patch_ids this depends on; empty list if none). '
             "Rules: constraint max 2 per turn. decision max 2 per turn, extract only the NEW value for revisions. "
-            "IMPORTANT: constraints are non-negotiable REQUIREMENTS on the system being built "
-            "(deadlines, limits, compliance rules). Experimental and configuration parameters "
-            "(temperatures, budget values, model names, table settings) are NOT constraints — "
-            "store those as code or structure patches. "
+            "IMPORTANT: distinguish value DIRECTIVES from configuration DESCRIPTIONS. "
+            "A speaker instructing, setting, or changing a value — 'set the webhook timeout "
+            "to 30 seconds', 'change the fee to 0.5%', 'the timeout must be 10 seconds' — is a "
+            "DECISION, even when the parameter sounds like configuration. Constraints are "
+            "non-negotiable REQUIREMENTS on the system being built (deadlines, limits, "
+            "compliance rules). Only detached descriptions of a document's or experiment's "
+            "own settings (a study's temperature, a table's parameters, model names, budget "
+            "values used in an evaluation) are NOT constraints — store those as code or "
+            "structure patches. "
             "Each distinct numeric result (score, percentage, p-value, threshold, date) gets its "
             "OWN patch with the value and its unit/label verbatim; never merge multiple statistics "
             "into one payload. When the content contains a table, extract one patch per row, "
@@ -164,6 +189,9 @@ def _build_system_prompt(dense: bool = False) -> str:
         '"dependencies" (a list of patch_ids this depends on; empty list if none). '
         "Rules: constraint max 1 per turn, truly non-negotiable specs only. "
         "decision max 1 per turn, extract only the NEW value for revisions. "
+        "A statement that sets, changes, or decides a parameter value ('set the timeout "
+        "to 30 seconds', 'timeout updated to 10 seconds') is a DECISION, not code — even "
+        "when it sounds like a configuration parameter. "
         "code holds implementation detail. equation holds formulas. entity holds named things. "
         "structure holds schemas and workflows. "
         "Reply with a raw JSON array only — no markdown fences, no commentary."

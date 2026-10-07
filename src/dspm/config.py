@@ -44,11 +44,14 @@ MAX_PAYLOAD_CHARS = 200
 # v0.1.10: auto-dense extraction — the fraction of digit-bearing words at
 # which add_turn() routes a turn through the dense extraction funnel
 # (up to 10 patches) even when the memory was created with dense=False.
-# 0.05 ≈ one number per 20 words. Deliberately sensitive: the dense prompt
-# is a permissive superset of the standard one, so triggering it on a
-# number-bearing conversational turn is harmless, while MISSING it on a
-# fact-dense document chunk loses most numeric facts at extraction (the
-# 70%/85% document-test failure mode).
+# 0.05 ≈ one number per 20 words. Deliberately sensitive: MISSING dense
+# mode on a fact-dense document chunk loses most numeric facts at
+# extraction (the 70%/85% document-test failure mode).
+# NOTE (v0.1.13): the dense prompt is NOT a harmless superset of the
+# standard one — it carries document-mode rules, so it must stay safe
+# for conversation turns too. Verified live by scripts/smoke_conversation.py
+# (added v0.1.13, after 'set the webhook timeout to 30 seconds' was
+# misclassified as code by the v0.1.10 config rule).
 DENSE_AUTO_THRESHOLD = 0.05
 
 # v0.1.11: extraction output budget, in completion tokens.
