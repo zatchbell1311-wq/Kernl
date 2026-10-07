@@ -9,6 +9,14 @@ v0.1.10: recency in T5 now actually decays (the previous formula was
 identically 1.0 for every patch, so W_RECENCY never influenced ranking —
 a paper/code gap), and compress() diagnostics report the OUTPUT counts
 instead of values frozen before compression ran. Unused imports removed.
+
+v0.1.12: revision stories survive starvation budgets. Payloads carrying
+a "(was X)" span have a 3-word floor (the story form "10 (was 30)"),
+and _trim_numeric_first returns that minimal story when the allowance is
+too small for value + unit + history. Found in the live webhook rematch:
+8 criticals at a 59-token budget trimmed the revision to a valueless
+"10 seconds" — the replaced value vanished and the answer model
+fabricated a replacement.
 """
 
 from __future__ import annotations
@@ -265,6 +273,15 @@ class DSPMEngine:
             return 0.0
         return float(np.dot(a, b) / denom)
 
+    @staticmethod
+    def _word_floor(payload: str) -> int:
+        """v0.1.12: the minimum word count a critical payload keeps under
+        budget pressure. 2 by default; 3 when it carries a '(was X)'
+        revision story — the story form '10 (was 30)' IS the floor, and
+        trimming below it destroys the revision history while the
+        current value survives (the live webhook-rematch failure)."""
+        return 3 if "(was" in payload else 2
+
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
         criticals = sorted([p for p in work if p.is_critical], key=lambda p: p.utility, reverse=True)
@@ -285,7 +302,10 @@ class DSPMEngine:
             if non_crit:
                 selected_total.remove(min(non_crit, key=lambda q: q.utility))
                 continue
-            trimmable = [q for q in selected_total if len(q.payload.split()) > 2]
+            # v0.1.12: '(was X)' payloads have a 3-word floor (the story
+            # form) — see _word_floor
+            trimmable = [q for q in selected_total
+                         if len(q.payload.split()) > self._word_floor(q.payload)]
             if trimmable:
                 tgt = max(trimmable, key=lambda q: len(q.payload.split()))
                 tgt.payload = self._trim_numeric_first(
@@ -304,15 +324,21 @@ class DSPMEngine:
         per_patch_words = max(2, int((limit / n - 4) / 1.4))
         trimmed = 0
         # pass 1 — uniform proportional trim
+        # v0.1.12: payloads carrying "(was X)" get a 3-word floor
+        # (_word_floor) — a 2-word allowance keeps the number+unit and
+        # drops the history, leaving a valueless current value.
         for p in criticals:
+            allowance = max(self._word_floor(p.payload), per_patch_words)
             before = len(p.payload.split())
-            p.payload = self._trim_numeric_first(p.payload, per_patch_words)
+            p.payload = self._trim_numeric_first(p.payload, allowance)
             p.recount()
             trimmed += before - len(p.payload.split())
         # pass 2 — while the JOINED critical block is over limit, trim the
-        # critical with the MOST words; drop only at the <=2-word floor
+        # critical with the MOST words; drop only at each payload's floor
+        # v0.1.12: the floor is per-payload (2, or 3 for was-stories)
         while criticals and count_tokens(self.build_context(criticals)) > limit:
-            trimmable = [q for q in criticals if len(q.payload.split()) > 2]
+            trimmable = [q for q in criticals
+                         if len(q.payload.split()) > self._word_floor(q.payload)]
             if trimmable:
                 tgt = max(trimmable, key=lambda q: len(q.payload.split()))
                 tgt.payload = self._trim_numeric_first(
@@ -328,15 +354,48 @@ class DSPMEngine:
     # pairing — live testing produced both "timeout 30" and "Rate per").
     # v0.1.9: "(was X)" replacement spans protected at 60; temporal
     # values following a key noun ("deadline Friday") get priority 90.
+    # v0.1.12: minimal revision story — was-payloads have a 3-word floor,
+    # and at that floor the trim returns the story form "10 (was 30)"
+    # (current value + history, units dropped) instead of a valueless
+    # "10 seconds".
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words. Number+unit pairs and '(was X)'
         replacement spans are atomic; selection priority: number-spans >
         temporal-after-key-noun (90) > was-spans (60) > compound units
         (50) > number-adjacent words (40) > key constraint nouns (30) >
-        proper nouns (20) > filler (10)."""
+        proper nouns (20) > filler (10). Payloads carrying a '(was X)'
+        span at an allowance of <= 3 words return the minimal story
+        '10 (was 30)' — the revision history is never trimmed away
+        while the current value survives."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
+
+        # ── 0. v0.1.12: minimal revision story ──────────────────────
+        # At tiny allowances the ladder below keeps "10 seconds" (the
+        # number+unit span outranks the was-span) and DROPS the history.
+        # When the payload carries "(was X)" and the allowance is too
+        # small for value + unit + history, keep the current number and
+        # the full was-span, dropping everything else (units included).
+        # Only returns when the story fits within max_words — otherwise
+        # falls through to the ladder, so callers trimming toward the
+        # floor always make strict progress (no live-lock in pass 2 or
+        # the hard-cap loop).
+        if max_words <= 3 and any(w.lower().startswith("(was") for w in words):
+            was_start = next(i for i, w in enumerate(words)
+                             if w.lower().startswith("(was"))
+            j = was_start
+            while j < len(words) and not words[j].endswith(")"):
+                j += 1
+            was_end = min(j, len(words) - 1)
+            span = words[was_start:was_end + 1]
+            current = next((words[i] for i in range(was_start)
+                            if re.search(r"\d", words[i])), None)
+            story = ([current] + span) if current else span
+            if len(story) <= max_words:
+                return " ".join(story)
+            # story doesn't fit this allowance — fall through to the
+            # normal ladder below
 
         # ── 1. identify protected spans ──────────────────────────────
         spans = []          # (start, end, priority)

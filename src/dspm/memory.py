@@ -6,6 +6,14 @@ through the dense extraction funnel even when dense=False. (v0.1.9 defined
 numeric_density but never called it, so document tests at 70%/85% removal
 silently ran the 5-patch funnel and lost most numeric facts at extraction.)
 Also adds add_document(): sentence-aware chunking for document ingestion.
+
+v0.1.12: (was X) baking is history-aware. A stale patch that is itself a
+revision ("... 10 seconds (was 30)") previously gave up its CURRENT value
+when superseded — the baking took the stale payload's first numeric word,
+so a restated revision baked a wrong "(was 10)" instead of carrying
+"(was 30)" forward. It now detects restatements of the same revision and
+carries the history, and chains full revision lineages ("(was 300 then
+60)"). Found in the live webhook rematch.
 """
 
 from __future__ import annotations
@@ -73,6 +81,49 @@ def _slot_head(text: str) -> str:
         if len(w) >= 3 and w not in _STOPWORDS and w not in _REVISION_MARKERS:
             return _normalize(w)
     return ""
+
+
+# v0.1.12: the numeric value inside a single word, for comparing values
+# across payloads ("30)" -> "30", "0.5%," -> "0.5").
+def _first_number(word: str) -> Optional[str]:
+    """The numeric value inside a single word ("30)" -> "30", "0.5%," -> "0.5")."""
+    m = re.search(r"\d+(?:\.\d+)?", word)
+    return m.group() if m else None
+
+
+# v0.1.12: the value a superseded patch gives up, for (was X) baking.
+# The live webhook rematch showed the v0.1.9 baking taking the FIRST
+# numeric word of each stale patch — correct for plain patches, wrong
+# when the stale patch is itself a revision: "... 10 seconds (was 30)"
+# superseded by another "10 seconds" patch baked "(was 10)" (the stale's
+# CURRENT value) instead of "(was 30)" (its history), corrupting the
+# revision story that trimming then destroyed.
+def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[str]:
+    """The value a superseded patch gives up, for (was X) baking.
+
+    - plain stale patch ("timeout 30 seconds") -> its current value, "30"
+    - stale revision restated by the new patch (same current value) ->
+      the stale's HISTORY: "... 10 (was 30)" gives "30"
+    - stale revision genuinely superseded (different value) -> the full
+      lineage: "... 300 (was 60)" gives "300 then 60"
+    Returns None when the stale patch carries no numbers at all."""
+    m = re.search(r"\(was ([^)]+)\)", stale_payload)
+    history = m.group(1).strip() if m else None
+    base = re.sub(r"\(was [^)]+\)", "", stale_payload)
+    s_nums = [w for w in base.split() if re.search(r"\d", w)]
+    current = s_nums[0] if s_nums else None
+    current_val = _first_number(current) if current else None
+    if current_val is not None and new_current is not None \
+            and current_val == new_current:
+        # restatement of the same revision: the value that was replaced
+        # to reach this point is the stale's own history, not its
+        # (identical) current value
+        return history
+    if current and history:
+        # a genuinely new revision over a previously-revised patch:
+        # bake the stale's current value, chained with its history
+        return f"{current} then {history}"
+    return current or history
 
 
 class DSPMMemory:
@@ -163,6 +214,10 @@ class DSPMMemory:
     # testing showed aggressive trimming otherwise left the correct value
     # with no record of what it replaced. The (was X) span is atomic in
     # trimming (see engine), so the full revision story survives.
+    #
+    # v0.1.12: the baking is history-aware — a stale patch that is
+    # itself a revision gives up its HISTORY when restated, and its full
+    # lineage when genuinely superseded (see _replaced_value).
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical
         revision supersession."""
@@ -211,13 +266,22 @@ class DSPMMemory:
                         stale.append(existing)          # (c2) terse cross-type
                         continue
 
-        # v0.1.9: bake replaced values into the surviving payload
+        # v0.1.12: bake replaced values into the surviving payload —
+        # now history-aware. v0.1.9's baking took each stale patch's
+        # FIRST numeric word, which is its CURRENT value; when the stale
+        # patch was itself a revision, that baked a wrong "(was 10)"
+        # instead of carrying "(was 30)" forward (live webhook rematch).
         if stale and patch.is_critical:
+            # the new patch's current value: first number outside any
+            # (was ...) span (load-time merges can carry spans in)
+            patch_base = re.sub(r"\(was [^)]+\)", "", patch.payload)
+            patch_nums = [w for w in patch_base.split() if re.search(r"\d", w)]
+            new_current = _first_number(patch_nums[0]) if patch_nums else None
             replaced_vals = []
             for s in stale:
-                s_nums = [w for w in s.payload.split() if re.search(r"\d", w)]
-                if s_nums:
-                    replaced_vals.append(s_nums[0])
+                val = _replaced_value(s.payload, new_current)
+                if val:
+                    replaced_vals.append(val)
             if replaced_vals and "(was" not in patch.payload:
                 patch.payload = f"{patch.payload} (was {' then '.join(replaced_vals[:2])})"
 

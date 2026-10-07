@@ -632,3 +632,89 @@ def test_custom_client_typeerror_falls_back():
     assert len(patches) == 1
     assert len(calls) == 2
     assert 'reasoning_effort' not in calls[1]
+
+
+# ── v0.1.12: revision-story regression tests ─────────────────────
+# From the live webhook rematch (conversation mode, 70% removal):
+#   Bug 1 — the (was X) baking took the stale patch's FIRST numeric
+#   word, which is its CURRENT value when the stale patch is itself a
+#   revision: "… 10 seconds (was 30)" superseded by a restated "10
+#   seconds" baked a wrong "(was 10)" instead of carrying "(was 30)".
+#   Bug 2 — at starvation budgets (8 criticals, 59 tokens → 2-word
+#   allowances) the trim ladder kept "10 seconds" and dropped the
+#   was-span entirely; the answer model then fabricated a replacement.
+
+def test_revision_of_revision_keeps_history():
+    """v0.1.12: a revision-of-a-revision must bake the HISTORY, not the
+    stale patch's current value. The live trace: 30 → '10 (was 30)' →
+    restated 10 baked '(was 10)' — wrong. It must carry '(was 30)'."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Webhook timeout set to 30 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'webhook timeout now 10 seconds', []))
+    first = [p.payload for p in m.critical_patches]
+    assert len(first) == 1
+    assert '(was 30)' in first[0], f"first revision baked wrong: {first[0]!r}"
+    # a restatement of the SAME revision arrives (assistant confirming)
+    m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
+                                 'Webhook timeout updated to 10 seconds, '
+                                 'superseding previous 30 seconds value', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"restatement should supersede: {crits}"
+    assert '10' in crits[0]
+    assert '(was 10)' not in crits[0], \
+        f"baked the stale's CURRENT value, not its history: {crits[0]!r}"
+    assert 'was' in crits[0].lower() and '30' in crits[0], \
+        f"revision history lost: {crits[0]!r}"
+
+
+def test_revision_story_survives_critical_starvation():
+    """v0.1.12: the live rematch scenario — 8 criticals at a 59-token
+    budget give 2-word trim allowances. The ladder kept '10 seconds' and
+    dropped the '(was 30)' span, so the replaced value vanished from the
+    context and the answer model fabricated a replacement. The story
+    form '10 (was 30)' must now survive."""
+    m = DSPMMemory(budget=59)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Payments must be PCI compliant', []))
+    m._merge_patch(SemanticPatch('p0_1', 0, 'constraint',
+                                 'Max fee 0.5%', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
+                                 'Webhook timeout set to 30 seconds', []))
+    m._merge_patch(SemanticPatch('p3_0', 3, 'decision',
+                                 'webhook timeout now 10 seconds', []))
+    m._merge_patch(SemanticPatch('p6_0', 6, 'constraint',
+                                 'Audit retention 5 years', []))
+    m._merge_patch(SemanticPatch('p6_1', 6, 'constraint',
+                                 'Dashboard loads in 2 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Use Stripe for payments', []))
+    m._merge_patch(SemanticPatch('p7_0', 7, 'decision',
+                                 'Redis caching with CDN', []))
+    m._merge_patch(SemanticPatch('p8_0', 8, 'decision',
+                                 'Tokenized ASV storage', []))
+    assert len(m.critical_patches) == 8, \
+        f"expected 8 criticals (webhook pair collapsed): {len(m.critical_patches)}"
+    ctx = m.get_context(query='webhook timeout')
+    assert '10' in ctx, f"current value lost: {ctx!r}"
+    assert 'was' in ctx.lower() and '30' in ctx, \
+        f"revision story lost under starvation: {ctx!r}"
+
+
+def test_revision_chain_bakes_full_history():
+    """v0.1.12: a genuine new revision over a previously-revised patch
+    must chain the FULL lineage: 60 -> 300 -> 120 bakes
+    '(was 300 then 60)', not just the last replaced value."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Cache TTL set to 60 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'cache TTL now 300 seconds', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
+                                 'cache TTL updated to 120 seconds', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"chain should collapse to one critical: {crits}"
+    assert '120' in crits[0], f"current value missing: {crits[0]!r}"
+    assert '300' in crits[0] and '60' in crits[0], \
+        f"full revision lineage not chained: {crits[0]!r}"
