@@ -1,15 +1,21 @@
-"""User-facing DSPM memory API."""
+"""User-facing DSPM memory API.
+
+v0.1.10: auto-dense extraction — add_turn() now checks
+numeric_density(text) >= DENSE_AUTO_THRESHOLD and routes fact-heavy turns
+through the dense extraction funnel even when dense=False. (v0.1.9 defined
+numeric_density but never called it, so document tests at 70%/85% removal
+silently ran the 5-patch funnel and lost most numeric facts at extraction.)
+Also adds add_document(): sentence-aware chunking for document ingestion.
+"""
 
 from __future__ import annotations
 
-import copy
-import json
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
-from dspm.config import PATCH_TYPES, CRITICAL_TYPES, DEFAULT_BUDGET, REVISION_OVERLAP
+from dspm.config import DEFAULT_BUDGET, DENSE_AUTO_THRESHOLD
 from dspm.engine import DSPMEngine
-from dspm.extractor import extract_turn
+from dspm.extractor import extract_turn, numeric_density
 from dspm.patch import SemanticPatch, count_tokens
 from dspm.persistence import save_memory, load_memory
 
@@ -86,6 +92,8 @@ class DSPMMemory:
         self.model = model
         # v0.1.9: dense mode — wider extraction funnel for fact-heavy
         # turns (documents, specs, research notes). Off by default.
+        # v0.1.10: per-turn AUTO-dense now also applies (see add_turn) —
+        # this flag forces dense for EVERY turn regardless of density.
         self.dense = dense
         self.engine = DSPMEngine(budget=budget)
         self.patches: List[SemanticPatch] = []
@@ -94,17 +102,54 @@ class DSPMMemory:
         self._last_context = ""
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
-        """Add a conversation turn and return the newly extracted patches."""
+        """Add a conversation turn and return the newly extracted patches.
+
+        v0.1.10: turns whose numeric density (fraction of digit-bearing
+        words) reaches DENSE_AUTO_THRESHOLD automatically get the dense
+        extraction funnel — up to 10 patches, relaxed critical caps —
+        even when the memory was created with dense=False."""
         if self.llm_client is None:
             raise ValueError("llm_client is required to call add_turn()")
 
+        # v0.1.10: the dead-code fix. v0.1.9 defined numeric_density but
+        # never called it; the manual flag was too easy to forget, and
+        # document runs silently used the 5-patch funnel.
+        dense = self.dense or numeric_density(text) >= DENSE_AUTO_THRESHOLD
         patches = extract_turn(self.llm_client, self.model, text, self.turns,
                                recent_context=self._last_context,
-                               dense=self.dense)
+                               dense=dense)
         for p in patches:
             self._merge_patch(p)
         self.turns += 1
         return patches
+
+    def add_document(self, text: str, chunk_tokens: int = 400) -> int:
+        """Ingest a document as sentence-aware chunks. Returns chunk count.
+
+        v0.1.10: chunks split on sentence boundaries — never mid-sentence
+        or mid-table-row (the word-count chunker in the comparison harness
+        did both). Each chunk goes through add_turn, so fact-dense
+        sections automatically get the dense extraction funnel. A single
+        sentence longer than chunk_tokens becomes its own chunk (we never
+        split inside a sentence)."""
+        if not text or not text.strip():
+            return 0
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        chunks: List[str] = []
+        cur: List[str] = []
+        cur_toks = 0
+        for s in sentences:
+            s_toks = count_tokens(s)
+            if cur and cur_toks + s_toks > chunk_tokens:
+                chunks.append(" ".join(cur))
+                cur, cur_toks = [], 0
+            cur.append(s)
+            cur_toks += s_toks
+        if cur:
+            chunks.append(" ".join(cur))
+        for ch in chunks:
+            self.add_turn("user", ch)
+        return len(chunks)
 
     # Supersession rules (accumulated v0.1.3 → v0.1.7):
     #   (a)  same type + >=3 shared words + revision verb

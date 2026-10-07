@@ -91,6 +91,17 @@ class TestSaveLoad:
         loaded = m.load(path)
         assert loaded == 1
 
+    def test_load_corrupt_json_returns_zero(self, tmp_path):
+        """v0.1.10: a truncated/corrupted notebook file returns 0 instead
+        of raising — matching the defensive posture of _record_to_patch.
+        (Atomic writes make this rare, but load() pointing at any damaged
+        file shouldn't crash the app.)"""
+        path = str(tmp_path / "corrupt.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('{"schema": 1, "patches": [trunc')
+        m = DSPMMemory(budget=250)
+        assert m.load(path) == 0
+
     def test_atomic_save_leaves_no_tmp(self, tmp_path):
         m = DSPMMemory(budget=250)
         m._merge_patch(_mk_patch("p0_0", 0, "entity", "Stripe"))

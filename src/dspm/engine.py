@@ -4,6 +4,11 @@ The engine applies the seven stages outlined in the package design:
 T1 fingerprint deduplication, T2 slot fusion, T3 delta encoding,
 T4 causal pruning, T5 utility scoring, T6 critical guarantee and
 selection, and T7 adaptive budgeting.
+
+v0.1.10: recency in T5 now actually decays (the previous formula was
+identically 1.0 for every patch, so W_RECENCY never influenced ranking —
+a paper/code gap), and compress() diagnostics report the OUTPUT counts
+instead of values frozen before compression ran. Unused imports removed.
 """
 
 from __future__ import annotations
@@ -11,22 +16,17 @@ from __future__ import annotations
 import copy
 import math
 import re
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 from dspm.config import (
     PATCH_TYPES,
-    BASE_BUDGET_FRACTIONS,
-    CRITICAL_TYPES,
     CRITICAL_SHARE,
     DEFAULT_BUDGET,
-    DELTA_MIN_SAVING,
     RECENCY_LAMBDA,
-    SHADOW_THRESHOLD,
     W_ALIGN,
     W_COST,
     W_DEP,
     W_RECENCY,
-    ALPHA_EMA,
 )
 from dspm.patch import SemanticPatch, count_tokens
 
@@ -72,7 +72,12 @@ class DSPMEngine:
         self._embedder = None
 
     def compress(self, patches: Sequence[SemanticPatch], query: str, turn_index: int) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
-        """Compress a list of SemanticPatch objects into selected patches plus diagnostics."""
+        """Compress a list of SemanticPatch objects into selected patches plus diagnostics.
+
+        The method deep-copies patches then applies the T1-T7 pipeline. It
+        returns a selected patch list together with a diagnostics dictionary
+        representing the stage-level counts and token information.
+        """
         work = copy.deepcopy(list(patches))
         diagnostics = {
             "stages": [],
@@ -81,22 +86,42 @@ class DSPMEngine:
             "critical_retained": 0,
         }
 
+        # T1 fingerprint deduplication
         work = self._dedup_fingerprints(work)
         diagnostics["stages"].append("T1")
+
+        # T2 slot fusion
         work = self._slot_fusion(work)
         diagnostics["stages"].append("T2")
+
+        # T3 delta encoding
         work = self._delta_encoding(work)
         diagnostics["stages"].append("T3")
+
+        # T4 causal pruning
         work = self._causal_pruning(work)
         diagnostics["stages"].append("T4")
-        work = self._score_utility(work, query)
+
+        # T5 utility scoring
+        # v0.1.10: turn_index now reaches the scorer so recency decays.
+        work = self._score_utility(work, query, turn_index)
         diagnostics["stages"].append("T5")
+
+        # T6 critical guarantee and shadow selection
         selected, selected_diagnostics = self._shadow_selection(work)
         diagnostics.update(selected_diagnostics)
         diagnostics["stages"].append("T6")
+
+        # T7 adaptive budgeting
         selected = self._adaptive_budgeting(selected)
         diagnostics["stages"].append("T7")
 
+        # v0.1.10: report the OUTPUT, not the input — "selected" and
+        # "tokens" were previously frozen at their pre-compression values.
+        diagnostics["selected"] = len(selected)
+        diagnostics["tokens"] = count_tokens(self.build_context(selected))
+
+        # ensure token bound
         return selected, diagnostics
 
     def _dedup_fingerprints(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:
@@ -182,8 +207,16 @@ class DSPMEngine:
             out.append(p)
         return out
 
-    def _score_utility(self, patches: Sequence[SemanticPatch], query: str) -> List[SemanticPatch]:
-        """T5: utility scoring using alignment, dependency centrality, recency, and cost penalties."""
+    def _score_utility(self, patches: Sequence[SemanticPatch], query: str,
+                       current_turn: int = 0) -> List[SemanticPatch]:
+        """T5: utility scoring using alignment, dependency centrality, recency, and cost penalties.
+
+        v0.1.10: recency is now a real decay. The previous formula
+        exp(-lambda * max(0, 0 - p.turn_index)) evaluated to exactly 1.0
+        for every non-negative turn index, so W_RECENCY contributed a
+        constant and never affected ranking. Older patches now decay
+        relative to the current turn, matching the paper's description.
+        The default keeps backward compatibility for direct callers."""
         type_boost = {
             'constraint': 0.20,
             'decision': 0.18,
@@ -201,7 +234,8 @@ class DSPMEngine:
         for p in patches:
             align = self._align_score(p, query)
             dep_c = dep_counts.get(p.patch_id, 0)
-            recency = math.exp(-RECENCY_LAMBDA * max(0, 0 - p.turn_index))
+            # v0.1.10: real recency decay (see docstring)
+            recency = math.exp(-RECENCY_LAMBDA * max(0, current_turn - p.turn_index))
             cost_n = p.token_cost / max_cost
             type_boost_value = type_boost.get(p.patch_type, 0.0)
             p.utility = (W_ALIGN * (align + type_boost_value)) + (W_DEP * dep_c) + (W_RECENCY * recency) - (W_COST * cost_n)

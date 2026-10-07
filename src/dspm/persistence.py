@@ -7,13 +7,18 @@ Chat 1, and later revisions supersede earlier values on load.
 Format: JSON list of patch records. Files are portable across machines
 and versions; unknown fields in newer files are ignored on load for
 forward compatibility.
+
+v0.1.10: load_memory() now returns 0 for a corrupted or truncated
+notebook file instead of raising — matching the defensive posture of
+_record_to_patch, which already skips malformed records individually.
+Unused typing.List import removed. No schema change.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from dspm.patch import SemanticPatch
 
@@ -71,12 +76,19 @@ def load_memory(memory, path: str) -> int:
     existing patches are kept; saved patches merge in through the same
     duplicate-suppression / supersession rules as live turns).
 
-    Returns the number of patches loaded (0 if the file is missing or empty).
-    """
+    Returns the number of patches loaded (0 if the file is missing,
+    empty, or corrupted)."""
     if not os.path.exists(path):
         return 0
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    # v0.1.10: a truncated or corrupted notebook returns 0 rather than
+    # raising — matches _record_to_patch, which already skips malformed
+    # records individually. Atomic writes make this rare in practice,
+    # but a user pointing load() at a damaged file shouldn't get a crash.
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return 0
     # accept both wrapped and bare-list formats
     records = data.get("patches") if isinstance(data, dict) else data
     if not isinstance(records, list):

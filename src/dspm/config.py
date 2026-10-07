@@ -40,3 +40,13 @@ BASE_BUDGET_FRACTIONS = {
 }
 
 MAX_PAYLOAD_CHARS = 200
+
+# v0.1.10: auto-dense extraction — the fraction of digit-bearing words at
+# which add_turn() routes a turn through the dense extraction funnel
+# (up to 10 patches) even when the memory was created with dense=False.
+# 0.05 ≈ one number per 20 words. Deliberately sensitive: the dense prompt
+# is a permissive superset of the standard one, so triggering it on a
+# number-bearing conversational turn is harmless, while MISSING it on a
+# fact-dense document chunk loses most numeric facts at extraction (the
+# 70%/85% document-test failure mode).
+DENSE_AUTO_THRESHOLD = 0.05

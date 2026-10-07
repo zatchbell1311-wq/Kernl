@@ -3,18 +3,22 @@
 The package converts raw conversational turns into typed semantic patches.
 SemanticPatch stores the payload, dependency links, scoring metadata, and
 compression-oriented bookkeeping fields used in the engine.
+
+v0.1.10: no functional changes — the data model already supports
+auto-dense extraction and document ingestion. Only unused imports
+(dataclasses.field, config.PATCH_TYPES) were removed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 import re
 from typing import List
 
 import tiktoken
 
-from dspm.config import MAX_PAYLOAD_CHARS, PATCH_TYPES, CRITICAL_TYPES, SHORT_TAGS
+from dspm.config import MAX_PAYLOAD_CHARS, CRITICAL_TYPES, SHORT_TAGS
 
 
 def count_tokens(text: str) -> int:
@@ -86,4 +90,3 @@ class SemanticPatch:
     def is_critical(self) -> bool:
         """Return True only for constraint and decision semantic patches."""
         return self.patch_type in CRITICAL_TYPES
-

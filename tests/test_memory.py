@@ -1,12 +1,10 @@
 import json
-import hashlib
 
 import pytest
 
 from dspm import DSPMMemory
 from dspm.patch import SemanticPatch
-from dspm.config import PATCH_TYPES, CRITICAL_TYPES, SHORT_TAGS
-from dspm.engine import DSPMEngine
+from dspm.config import PATCH_TYPES
 
 
 class MockResponse:
@@ -61,27 +59,30 @@ class MockLLMClient:
         self.chat = Chat(self)
 
 
-class MockLLMClientFourTurns:
-    def __init__(self):
-        # same client, but pass a valid JSON array written by test fixture
-        self.chat = type('Chat', (), {'completions': type('Completions', (), {'create': lambda self, **kwargs: MockResponse(json.dumps([
-            {
-                "patch_id": "patch-1",
-                "turn_index": 0,
-                "patch_type": "constraint",
-                "payload": "Always return JSON output.",
-                "dependencies": [],
-                "utility": 0.9,
-            },
-            {
-                "patch_id": "patch-2",
-                "turn_index": 0,
-                "patch_type": "decision",
-                "payload": "Use POST /v1/items for creation.",
-                "dependencies": [],
-                "utility": 0.8,
-            },
-        ]))})()})()
+# v0.1.10: replaces MockLLMClientFourTurns (defined since v0.1.0, never
+# referenced by any test — dead code). Records the system prompt and user
+# message of every LLM call, so the auto-dense and add_document tests can
+# verify what the extractor was actually asked to do.
+class PromptCapturingClient:
+    def __init__(self, content=None):
+        self.content = content or json.dumps([
+            {"patch_type": "entity", "payload": "Noted.", "patch_id": "x"}
+        ])
+        self.prompts = []
+        self.user_messages = []
+        owner = self
+
+        class Completions:
+            @staticmethod
+            def create(**kwargs):
+                owner.prompts.append(kwargs["messages"][0]["content"])
+                owner.user_messages.append(kwargs["messages"][1]["content"])
+                return MockResponse(owner.content)
+
+        class Chat:
+            completions = Completions()
+
+        self.chat = Chat()
 
 
 def test_add_turn_extracts_patches():
@@ -111,13 +112,17 @@ def test_critical_guarantee():
 
 
 def test_budget_enforced():
+    """v0.1.10: this test previously passed VACUOUSLY — it asserted
+    `token_count <= 50 or True` against an `_encode()` method that
+    doesn't exist, i.e. it asserted nothing. It now genuinely asserts
+    the compressed context fits the budget."""
+    from dspm.patch import count_tokens
     llm = MockLLMClient()
     mem = DSPMMemory(llm_client=llm, model='test-model', budget=50)
     mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
     context = mem.get_context(query='Return JSON output.')
-    token_count = len(mem._encode(context)) if hasattr(mem, '_encode') else 0
-    assert token_count <= 50 or True
     assert isinstance(context, str)
+    assert count_tokens(context) <= 50, f"budget exceeded: {context!r}"
 
 
 def test_stats():
@@ -389,3 +394,82 @@ def test_temporal_key_noun_survives_trim():
     ctx = m.get_context(query='hard rules and deadlines')
     if 'deadline' in ctx.lower():
         assert 'friday' in ctx.lower(), f"'Friday' trimmed from deadline: {ctx!r}"
+
+
+# ── v0.1.10: auto-dense + document ingestion regression tests ────
+# The 70%/85% document-comparison failure: extraction ran the standard
+# 5-patch funnel because numeric_density() was defined but never called
+# (dead code) and the dense flag was manual-only.
+
+def test_auto_dense_triggers_on_fact_heavy_turn():
+    """v0.1.10: a fact-heavy turn (numeric density >= threshold) must get
+    the dense extraction funnel even when the memory was created with
+    dense=False. This is the dead-code fix for the document-test failure."""
+    llm = PromptCapturingClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model', dense=False)
+    mem.add_turn('user',
+                 'p95 latency 200ms, fee 0.5%, timeout 30 seconds, '
+                 'budget 250 tokens, retries 3')
+    assert llm.prompts, "no prompt was captured"
+    assert 'FACT-DENSE' in llm.prompts[0], \
+        f"fact-heavy turn did not trigger dense mode: {llm.prompts[0][:80]!r}"
+
+
+def test_auto_dense_not_triggered_on_plain_prose():
+    """v0.1.10 guard: prose without numbers must NOT trigger the dense
+    funnel — auto-dense is density-driven, not always-on."""
+    llm = PromptCapturingClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model', dense=False)
+    mem.add_turn('user',
+                 'We should probably use a queue here and think about '
+                 'the overall design together before deciding anything')
+    assert llm.prompts, "no prompt was captured"
+    assert 'FACT-DENSE' not in llm.prompts[0], "dense mode triggered on plain prose"
+
+
+def test_dense_prompt_classifies_config_correctly():
+    """v0.1.10: the dense prompt must tell the model that experimental/
+    configuration parameters are NOT constraints (live document testing
+    misclassified config-table rows as [CON], consuming protected budget
+    while real results competed for scraps), and that each numeric
+    result gets its OWN patch."""
+    from dspm.extractor import _build_system_prompt
+    prompt = _build_system_prompt(dense=True)
+    assert 'NOT constraints' in prompt, \
+        "dense prompt lacks the config-is-not-a-constraint rule"
+    assert 'OWN patch' in prompt, \
+        "dense prompt lacks the one-stat-per-patch rule"
+
+
+def test_add_document_chunks_on_sentences():
+    """v0.1.10: add_document splits on sentence boundaries — never
+    mid-sentence or mid-table-row — and feeds each chunk as one turn."""
+    llm = PromptCapturingClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model')
+    doc = " ".join(
+        f"Requirement {i} states that the p95 latency must stay "
+        f"under {100 + i} milliseconds."
+        for i in range(1, 31))
+    n_chunks = mem.add_document(doc, chunk_tokens=60)
+    assert n_chunks >= 2, f"expected multiple chunks, got {n_chunks}"
+    assert mem.turns == n_chunks, "turns must equal chunk count"
+    for text in llm.user_messages:
+        assert text.rstrip().endswith('.'), \
+            f"chunk split mid-sentence: ...{text[-40:]!r}"
+
+
+def test_recency_prefers_recent_noncritical():
+    """v0.1.10: recency actually decays. The old formula exp(-lambda *
+    max(0, 0 - turn_index)) was identically 1.0, so W_RECENCY never
+    affected ranking. With two equal-cost non-critical patches from
+    different turns and a budget that fits only one, the RECENT patch
+    must survive. (This test fails on v0.1.9, where the tie kept the
+    older patch.)"""
+    m = DSPMMemory(budget=12)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'entity',
+                                 'Alpha service handles user profiles', []))
+    m._merge_patch(SemanticPatch('p9_0', 9, 'entity',
+                                 'Beta service handles user profiles', []))
+    ctx = m.get_context(query='user profiles')
+    assert 'Beta' in ctx, f"recent patch lost (recency not decaying?): {ctx!r}"
+    assert 'Alpha' not in ctx, f"older patch beat the recent one: {ctx!r}"

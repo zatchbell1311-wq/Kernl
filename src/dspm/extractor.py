@@ -3,6 +3,14 @@
 The extraction layer is intentionally dependency-light: it accepts a
 user-supplied OpenAI-compatible client object and returns SemanticPatch
 objects without requiring the caller to install an LLM SDK package.
+
+v0.1.10: `numeric_density` is now public (memory.add_turn calls it to
+auto-enable dense mode for fact-heavy turns), and the dense-mode prompt
+is hardened against two document-mode failure modes found in live
+testing: experimental/config parameters misclassified as constraints
+(fake criticals consuming the protected budget), and multiple
+statistics merged into single payloads (numbers lost before any
+compression stage ever ran).
 """
 
 from __future__ import annotations
@@ -10,10 +18,10 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dspm.patch import SemanticPatch
-from dspm.config import PATCH_TYPES, SHORT_TAGS
+from dspm.config import PATCH_TYPES
 
 
 def _strip_code_fences(text: str) -> str:
@@ -91,11 +99,11 @@ def parse_extraction(raw_text: str) -> List[Dict[str, Any]]:
     return []
 
 
-# v0.1.9: density metric for dense mode. A turn with many numeric facts
-# (documents, specs, research notes) needs a wider extraction funnel
-# than a conversational turn; the fixed 5-patch cap was shown in live
-# document testing to capture only a fraction of the facts.
-def _numeric_density(turn_text: str) -> float:
+# v0.1.10: renamed from _numeric_density and made PUBLIC — memory.add_turn
+# now calls it to auto-enable dense mode for fact-heavy turns. It was dead
+# code in v0.1.9 (defined but never called): the 70%/85% document tests ran
+# the standard 5-patch funnel unless the user remembered dense=True.
+def numeric_density(turn_text: str) -> float:
     """Fraction of words containing digits. 0.05 ≈ one number per 20 words."""
     words = turn_text.split()
     if not words:
@@ -103,6 +111,13 @@ def _numeric_density(turn_text: str) -> float:
     return sum(1 for w in words if re.search(r"\d", w)) / len(words)
 
 
+# v0.1.10: the dense prompt gains three rules, each mapped to a failure
+# observed in live document testing:
+#   - config/experimental params are NOT constraints (they were extracted
+#     as [CON]/[DEC] and consumed the protected critical budget)
+#   - one numeric result per payload (multiple stats per payload meant
+#     the 200-char cap or trimming destroyed the rest)
+#   - tables: one patch per row (results rows were summarized away)
 def _build_system_prompt(dense: bool = False) -> str:
     if dense:
         return (
@@ -117,6 +132,14 @@ def _build_system_prompt(dense: bool = False) -> str:
             '"patch_id" (a unique string), '
             '"dependencies" (a list of patch_ids this depends on; empty list if none). '
             "Rules: constraint max 2 per turn. decision max 2 per turn, extract only the NEW value for revisions. "
+            "IMPORTANT: constraints are non-negotiable REQUIREMENTS on the system being built "
+            "(deadlines, limits, compliance rules). Experimental and configuration parameters "
+            "(temperatures, budget values, model names, table settings) are NOT constraints — "
+            "store those as code or structure patches. "
+            "Each distinct numeric result (score, percentage, p-value, threshold, date) gets its "
+            "OWN patch with the value and its unit/label verbatim; never merge multiple statistics "
+            "into one payload. When the content contains a table, extract one patch per row, "
+            "preserving the row label and its values verbatim. "
             "code holds implementation detail. equation holds formulas and numeric results. "
             "entity holds named things. structure holds schemas and workflows. "
             "Reply with a raw JSON array only — no markdown fences, no commentary."
@@ -142,9 +165,11 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
                  recent_context: str = '', dense: bool = False) -> List[SemanticPatch]:
     """Extract semantic patches from a conversation turn using an LLM client.
 
-    v0.1.9: `dense=True` widens the extraction funnel — more patches
-    allowed, constraint/decision caps relaxed — for fact-heavy turns
-    where the standard 5-patch cap loses most numeric facts."""
+    `dense=True` widens the extraction funnel — more patches allowed,
+    constraint/decision caps relaxed — for fact-heavy turns where the
+    standard 5-patch cap loses most numeric facts. v0.1.10:
+    memory.add_turn decides this automatically via numeric_density();
+    callers may still force it with the flag."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 
@@ -193,14 +218,22 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
             continue
         patch_id = f"p{turn_index}_{len(patches)}"
 
+        # v0.1.10: same behavior as before, readable form — accepts a
+        # list of dependency ids or a single string; anything else is [].
+        raw_deps = item.get('dependencies')
+        if isinstance(raw_deps, list):
+            deps = [str(x) for x in raw_deps]
+        elif isinstance(raw_deps, str):
+            deps = [raw_deps]
+        else:
+            deps = []
+
         patch = SemanticPatch(
             patch_id=patch_id,
             turn_index=turn_index,
             patch_type=p_type,
             payload=payload,
-            dependencies=[str(x) for x in (item.get('dependencies') or [])
-                          if isinstance(item.get('dependencies'), list)] or
-                         ([str(item['dependencies'])] if isinstance(item.get('dependencies'), str) else []),
+            dependencies=deps,
         )
 
         if patch.fingerprint in seen_fingerprints:

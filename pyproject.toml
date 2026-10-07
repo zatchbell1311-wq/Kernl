@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dspm-memory"
-version = "0.1.9"
+version = "0.1.10"
 description = "Training-free long-context memory compression for LLM conversations with structural critical-constraint retention (100% CRR across our benchmarks)."
 readme = "README.md"
 requires-python = ">=3.9"
