@@ -1,4 +1,6 @@
-# DSPM Memory
+# DSPM — Dynamic Semantic Patch Memory
+
+**by Kernl.ai**
 
 > Compress multi-turn LLM conversations while every constraint, decision and revision survives.
 >
