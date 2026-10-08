@@ -251,17 +251,30 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 ---
 
-## Changelog
-
-Latest: **0.1.13** — value directives ("set X to Y", "change X to Y") are now classified as decisions, so replaced values enter the critical lineage and revision history survives. 46 tests.
-
-Full history: [CHANGELOG.md](CHANGELOG.md)
-
----
-
 ## Feedback
 
 Found a case where a constraint or revision is lost, or a conversation DSPM handles badly? Please [open an issue](https://github.com/zatchbell1311-wq/Kernl/issues) with the conversation and the budget you used.
+
+---
+
+## Version History
+
+| Version | Changes |
+|---------|---------|
+| 0.1.13 | **Value directives are decisions** (live conversation-mode finding): 'set the webhook timeout to 30 seconds' was classified as code — the v0.1.10 config-≠-constraint rule, written for document mode, over-applied to speaker directives, so the replaced value never entered the critical lineage and the revision history had nothing to bake. Both prompts now distinguish value DIRECTIVES ('set X to Y', 'change X to Y' — always decisions) from detached configuration DESCRIPTIONS (a document reporting its own settings — code/structure). New release rule: extraction-layer changes require BOTH live smoke gates (document + conversation) before shipping; adds `scripts/smoke_conversation.py`. 1 regression test (46 total). |
+| 0.1.12 | **Revision stories survive supersession and starvation** (live webhook-rematch findings): the (was X) baking is history-aware — a stale patch that is itself a revision gives up its history when restated (`(was 30)`, not the wrong `(was 10)`) and chains full lineages (`(was 300 then 60)`); payloads carrying `(was X)` have a 3-word floor, and at that floor trimming returns the minimal story `10 (was 30)` — current value plus history — instead of a valueless `10 seconds`. 3 regression tests (45 total). |
+| 0.1.11 | **Extractor hardening for reasoning models** (found in live document testing, 3 comparison rounds): extraction output budget raised 2000 → 4000 tokens and made overridable (`extract_turn(max_tokens=...)`); HTTP-200-but-empty responses — reasoning models burning the budget on chain-of-thought, which silently produced 0-patch chunks — are now retried with backoff; gpt-oss models automatically extract at low reasoning effort, with graceful fallback if the provider (400) or a custom client (TypeError) rejects the parameter. 6 regression tests (42 total). |
+| 0.1.10 | **Auto-dense extraction:** fact-heavy turns (numeric density ≥ 0.05) automatically get the dense extraction funnel (up to 10 patches) — v0.1.9's density detector was never wired, so document runs silently used the 5-patch funnel and lost most numeric facts at extraction (live check: a results paragraph now captures 7/7 benchmark numbers, previously 2–3). Dense prompt hardened: experimental/config parameters are no longer misclassified as constraints; each numeric result gets its own patch; tables extract one patch per row. New `add_document()` — sentence-aware document ingestion. Recency in utility scoring now actually decays (was a constant). Corrupted notebook files return 0 on `load()` instead of raising. Fixed a vacuous budget test. 6 new tests (36 total). |
+| 0.1.9 | Replaced values baked into superseded payloads as `(was X)` spans, atomic during trimming — the full revision story (current value + what it replaced) survives even at tiny budgets. Temporal values (weekdays/months/quarters) directly after key nouns survive trimming at priority 90. Dense-mode extraction for fact-heavy turns (manual `dense=True` flag). 3 new tests (30 total). |
+| 0.1.8 | Retry wording corrected — 0.1.7's wheel shipped the previous wording, caught by post-build wheel verification check immediately after upload. No code changes. |
+| 0.1.7 | README-first release (0.1.6's PyPI page was frozen pre-update — built after README finalization this time). Compound units ("per minute") and key constraint nouns ("timeout", "limit") survive trimming as atomic number-spans. "now"/"moved" recognized as revision verbs, and the extractor preserves revision verbs in payloads (real-model quickstart caught a stale-value contradiction). Claims scoped to benchmarks; retry behavior accurately described. Test scripts moved to `scripts/` with exposed API key revoked and stripped. `semantic` extra documented. Python 3.13 classifier; status → Beta. 3 new tests (27 total). |
+| 0.1.6 | **Cross-type revision supersession fixed:** revisions sharing only 3 content words previously survived as contradictions (found in external review). Units now bind to their numbers during trimming (`30 seconds`, never bare `30`). Automatic retry with backoff on rate limits and transient 5xx errors in `add_turn()`. Homepage added to PyPI metadata. 5 regression tests (24 total). |
+| 0.1.5 | **Budget fix:** changing `memory.budget` was silently ignored — the engine kept an independent budget copy. Now synced on every `get_context()`. New `set_budget()` method. `stats` now measures the actual joined context and reports the active budget. 2 regression tests (19 total). |
+| 0.1.4 | Persistence: `memory.save()` / `memory.load()` — cross-session long-term memory as portable JSON. Atomic writes, merge-on-load, revisions supersede stale values. 8 new tests (17 total). |
+| 0.1.3 | Revision supersession fix: stale same-type criticals now removed when superseded. Robust normalized content-word matching. |
+| 0.1.2 | Fixed critical-patch ID collisions (CRR 36% → 100% in 18-turn live test). Budget enforced on joined context string. |
+| 0.1.1 | Fixed T4 dropping criticals with dependencies. Fixed T3 payload mangling. Fixed extractor schema mismatch. |
+| 0.1.0 | Initial release. |
 
 ---
 
