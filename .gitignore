@@ -10,3 +10,5 @@ build/
 memory.json
 memory.json
 .pytest_tmp/
+
+brag-output/
