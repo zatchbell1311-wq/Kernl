@@ -1,0 +1,81 @@
+{
+  "budget": 80,
+  "extractor": "openai/gpt-oss-120b",
+  "judge": "qwen/qwen3.8-27b",
+  "summary": {
+    "dspm": [
+      17,
+      19,
+      0
+    ],
+    "lastk": [
+      9,
+      19,
+      0
+    ]
+  },
+  "detail": {
+    "coding_agent": {
+      "dspm_ctx": "[DEC] logging INFO\n[CON] no global\n[CON] All INFO\n[DEC] type hints\n[DEC] 20 connections\n[DEC] PostgreSQL 16\n[DEC] 50 (was 20)\n[DEC] 200ms p95\n[CON] 200ms p95\n[DEC] Python 3.12",
+      "lastk_ctx": "user: Actually, change the connection pool to 50 \u2014 20 is too few under load.\nassistant: Pool size updated to 50 connections.\nuser: All API endpoints must respond within 200ms p95. And log everything at INFO level.\nassistant: Performance target set: 200ms p95 for all endpoints. INFO-level logging.",
+      "dspm": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "lastk": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    "support_bot": {
+      "dspm_ctx": "[CON] System must always identify AI\n[CON] delivery date promises prohibited; only\n[CON] Response time must 3 seconds\n[DEC] Refund policy maximum $500 per\n[DEC] Refund policy window 30 days\n[CON] Escalate to a human if\n[CON] Bot must never promise delivery\n[ENT] AI self-identification noted",
+      "lastk_ctx": "user: The bot must never promise delivery dates. Only confirm what's in the order system.\nassistant: Understood. No delivery date promises; only system-confirmed information.\nuser: Response time under 3 seconds. It must always identify itself as an AI.\nassistant: AI self-identification and 3-second response time noted.",
+      "dspm": [
+        true,
+        true,
+        false,
+        false,
+        true,
+        true,
+        true
+      ],
+      "lastk": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    "fintech": {
+      "dspm_ctx": "[DEC] retention 5 years\n[DEC] audit logs 5 years\n[CON] latency sub-2-second (2 seconds)\n[CON] All payments must PCI-DSS\n[CON] Maximum fee per 0.5%\n[DEC] dashboard must 2 seconds\n[CON] PCI-DSS compliance requires ASV\n[DEC] 10 seconds, 30 seconds",
+      "lastk_ctx": "assistant: Webhook timeout updated to 10 seconds; the 30s value is superseded.\nuser: Also we need audit logs stored for exactly 5 years, and the dashboard must load in under 2 seconds.\nassistant: Audit retention set to 5 years. For the sub-2-second dashboard we'll use Redis caching with a CDN.",
+      "dspm": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "lastk": [
+        false,
+        false,
+        true,
+        true,
+        true
+      ]
+    }
+  }
+}

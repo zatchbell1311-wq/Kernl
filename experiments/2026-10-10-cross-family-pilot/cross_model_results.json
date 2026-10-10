@@ -1,0 +1,48 @@
+{
+  "coding_agent": {
+    "context": "[DEC] Logging level set to INFO\n[DEC] log everything at INFO level\n[CON] no global variables allowed\n[DEC] type hints required everywhere\n[DEC] max connections set to 20 connections\n[DEC] PostgreSQL version set to 16\n[DEC] Pool size updated to 50 connections (was 20)\n[DEC] Performance target set to 200ms p95 for all endpoints\n[CON] API endpoints must respond within 200ms p95\n[DEC] Python version set to 3.12\n[ENT] PostgreSQL version 16 specified for the database\n[ENT] Python version set to 3.12",
+    "ground_truth": [
+      "Python 3.12 required",
+      "Type hints everywhere",
+      "No global variables",
+      "PostgreSQL 16",
+      "Connection pool of 50 (revised from 20)",
+      "200ms p95 response time",
+      "INFO-level logging"
+    ],
+    "raw_tokens": 153,
+    "ctx_tokens": 135,
+    "patches": 12,
+    "criticals": 10
+  },
+  "support_bot": {
+    "context": "[CON] System must always identify itself as an AI in all interactions.\n[DEC] Refund policy maximum set to $500\n[CON] delivery date promises prohibited; only system-confirmed information allowed\n[CON] Response time must be under 3 seconds as a system constraint.\n[DEC] max refund amount set to $500\n[DEC] Refund policy window set to 30 days\n[CON] Escalate to a human when customer mentions legal action or requests a supervisor\n[CON] Bot must never promise delivery dates; only confirm dates from order system\n[ENT] AI self-identification noted\n[CODE] AI response time recorded as 3 seconds\n[STR] Escalation triggers noted: legal mentions or supervisor requests",
+    "ground_truth": [
+      "Refunds within 30 days only",
+      "Maximum refund $500",
+      "Escalate on legal action mentions",
+      "Escalate on supervisor requests",
+      "Never promise delivery dates",
+      "Response time under 3 seconds",
+      "Always identify as AI"
+    ],
+    "raw_tokens": 141,
+    "ctx_tokens": 153,
+    "patches": 11,
+    "criticals": 8
+  },
+  "fintech": {
+    "context": "[DEC] Audit retention set to 5 years as the new retention policy\n[DEC] audit logs stored for exactly 5 years\n[CON] Dashboard latency must be sub-2-second to meet performance requirement\n[CON] All payments must be PCI-DSS compliant as a non-negotiable requirement\n[CON] Maximum fee per transaction is limited to 0.5%\n[DEC] dashboard must load in under 2 seconds\n[CON] PCI-DSS compliance requires tokenized card storage and quarterly ASV scans\n[DEC] Webhook timeout updated to 10 seconds, superseding previous 30 seconds value (was 30)\n[CODE] fee cap set at 0.5% for tracking purposes\n[ENT] Redis caching combined with a CDN will be used for the dashboard\n[ENT] Stripe integration configured with automatic retries on failure",
+    "ground_truth": [
+      "PCI-DSS compliant payments",
+      "Max fee 0.5% per transaction",
+      "Webhook timeout is 10 seconds (revised from 30)",
+      "Audit logs stored 5 years",
+      "Dashboard loads under 2 seconds"
+    ],
+    "raw_tokens": 198,
+    "ctx_tokens": 175,
+    "patches": 12,
+    "criticals": 8
+  }
+}
