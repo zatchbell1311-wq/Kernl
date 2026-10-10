@@ -1,0 +1,33 @@
+{
+  "answers": {
+    "coding_agent": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "support_bot": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "fintech": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "method": "coding_agent and support_bot judged by me against the printed budget-250 contexts; fintech block redone after an earlier careless pass, answers drafted from an AI reading and verified by me line by line against the printed context",
+  "extractor": "openai/gpt-oss-120b (Groq)",
+  "budget": 250,
+  "date": "2026-10-10"
+}
