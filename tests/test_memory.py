@@ -800,3 +800,60 @@ def test_baking_chain_no_consecutive_duplicates():
         for i in range(1, len(chain)):
             assert chain[i] != chain[i - 1], \
                 f"consecutive duplicate in chain: {chain}"
+
+
+# ── v0.1.15: restatement collapse regression tests ───────────────
+# From the baseline experiments (Oct 11): same-type restatements (user
+# states, assistant confirms) produced duplicate criticals competing
+# for budget — "audit retention 5 years" AND "audit logs stored for
+# exactly 5 years" coexisted as two [CON] patches. Rule (b2) collapses
+# them. Rule (b) gains the same unit check (fixes the latent
+# "100 per minute" vs "100 per hour" false-positive from the audit).
+
+def test_restatement_collapse():
+    """v0.1.15: user states a fact, assistant confirms it with different
+    phrasing — same type, same value, same unit → ONE critical, not
+    two duplicates eating budget. (Fails on v0.1.14: both coexist.)"""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Audit retention set to 5 years', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Audit logs stored for exactly 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"restatement not collapsed (v0.1.15 fix): {crits}"
+    assert '5' in crits[0], f"value missing: {crits}"
+    assert '(was' not in crits[0], \
+        f"no baking for same-value restatement: {crits}"
+
+
+def test_different_units_not_collapsed():
+    """v0.1.15 guard: same number + same subject but different
+    time/size units are complementary facts, not restatements.
+    '100 per minute' ≠ '100 per hour'."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Rate limit 100 requests per minute', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Rate cap 100 requests per hour', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, \
+        f"different units wrongly collapsed: {crits}"
+    assert any('minute' in c.lower() for c in crits)
+    assert any('hour' in c.lower() for c in crits)
+
+
+def test_different_subjects_not_collapsed():
+    """v0.1.15 guard: same number + same head word but different
+    qualifiers (cloud vs training) are different facts with only 2
+    shared content words — below the ≥3 threshold."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Budget 100 for cloud', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Budget 100 for training', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, \
+        f"different subjects wrongly collapsed: {crits}"
+    assert any('cloud' in c.lower() for c in crits)
+    assert any('training' in c.lower() for c in crits)

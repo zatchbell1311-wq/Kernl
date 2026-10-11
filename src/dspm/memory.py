@@ -2,7 +2,7 @@
 
 v0.1.10: auto-dense extraction — add_turn() now checks
 numeric_density(text) >= DENSE_AUTO_THRESHOLD and routes fact-heavy turns
-through the dense extraction funnel even when dense=False. (v0.11.9 defined
+through the dense extraction funnel even when dense=False. (v0.1.9 defined
 numeric_density but never called it, so document tests at 70%/85% removal
 silently ran the 5-patch funnel and lost most numeric facts at extraction.)
 Also adds add_document(): sentence-aware chunking for document ingestion.
@@ -18,6 +18,14 @@ carries the history, and chains full revision lineages ("(was 300 then
 v0.1.14: baking chains are deduplicated — the baseline experiment (Oct 11)
 showed "(was 20 then 20)" (the same value baked twice) in the surviving
 payload. _replaced_value now deduplicates the chain before joining.
+
+v0.1.15: restatement collapse. The baseline experiment showed duplicate
+criticals eating the budget — "audit retention 5 years" AND "audit logs
+stored for exactly 5 years" coexisting as two [CON] patches. A new rule
+(b2) collapses same-type restatements when they share a slot head, ≥3
+content words, identical numbers, and identical time/size units. Rule (b)
+gains the same unit check (fixing the latent "rate 100 per minute" vs
+"rate 100 per hour" false-positive flagged in the v0.1.13 audit).
 """
 
 from __future__ import annotations
@@ -50,6 +58,15 @@ _REVISION_MARKERS = {
     "decrease", "decreased", "reduce", "reduced", "switch", "switched",
     "migrate", "migrated", "revert", "reverted",
     "now", "moved",
+}
+
+# v0.1.15: time/size unit words for the restatement collapse safety
+# check — "5 years" and "5 years" are the same fact; "100 per minute"
+# and "100 per hour" are not, even though the number matches.
+_TIME_SIZE_UNITS = {
+    "ms", "millisecond", "second", "sec", "minute", "min",
+    "hour", "hr", "day", "week", "month", "year",
+    "kb", "mb", "gb", "tb", "%",
 }
 
 
@@ -87,6 +104,22 @@ def _slot_head(text: str) -> str:
     return ""
 
 
+# v0.1.15: extract time/size units from ALL words in the payload.
+# v1.0 version only checked words IMMEDIATELY after numbers — missed "100
+# requests per minute" (the unit is 3 words away from the number), so
+# "per minute" and "per hour" looked identical. Now checks every word.
+def _units_in(text: str) -> frozenset:
+    """Extract ALL time/size units in the payload. Safety check for
+    restatement collapse — '5 years' and '5 years' are the same fact;
+    '100 per minute' and '100 per hour' are not."""
+    units = set()
+    for w in text.lower().split():
+        clean = w.strip(".,;)")
+        if clean.rstrip("s") in _TIME_SIZE_UNITS:
+            units.add(clean.rstrip("s"))
+    return frozenset(units)
+
+
 # v0.1.12: the numeric value inside a single word, for comparing values
 # across payloads ("30)" -> "30", "0.5%," -> "0.5").
 def _first_number(word: str) -> Optional[str]:
@@ -108,14 +141,7 @@ def _dedup_chain(values: List[str]) -> List[str]:
 
 
 # v0.1.12: the value a superseded patch gives up, for (was X) baking.
-# The live webhook rematch showed the v0.1.9 baking taking the FIRST
-# numeric word of each stale patch — correct for plain patches, wrong
-# when the stale patch is itself a revision: "... 10 seconds (was 30)"
-# superseded by another "10 seconds" patch baked "(was 10)" (the stale's
-# CURRENT value) instead of "(was 30)" (its history), corrupting the
-# revision story that trimming then destroyed.
-# v0.1.14: chains are deduplicated before joining (the baseline
-# experiment showed "(was 20 then 20)" — the same value twice).
+# v0.1.14: chains are deduplicated before joining.
 def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[str]:
     """The value a superseded patch gives up, for (was X) baking.
 
@@ -135,14 +161,8 @@ def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[
     current_val = _first_number(current) if current else None
     if current_val is not None and new_current is not None \
             and current_val == new_current:
-        # restatement of the same revision: the value that was replaced
-        # to reach this point is the stale's own history, not its
-        # (identical) current value
         return history
     if current and history:
-        # a genuinely new revision over a previously-revised patch:
-        # bake the stale's current value, chained with its history,
-        # deduplicated (v0.1.14)
         chain = _dedup_chain([current, history])
         return " then ".join(chain)
     return current or history
@@ -163,10 +183,6 @@ class DSPMMemory:
         self.budget = budget
         self.llm_client = llm_client
         self.model = model
-        # v0.1.9: dense mode — wider extraction funnel for fact-heavy
-        # turns (documents, specs, research notes). Off by default.
-        # v0.1.10: per-turn AUTO-dense now also applies (see add_turn) —
-        # this flag forces dense for EVERY turn regardless of density.
         self.dense = dense
         self.engine = DSPMEngine(budget=budget)
         self.patches: List[SemanticPatch] = []
@@ -175,18 +191,10 @@ class DSPMMemory:
         self._last_context = ""
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
-        """Add a conversation turn and return the newly extracted patches.
-
-        v0.1.10: turns whose numeric density (fraction of digit-bearing
-        words) reaches DENSE_AUTO_THRESHOLD automatically get the dense
-        extraction funnel — up to 10 patches, relaxed critical caps —
-        even when the memory was created with dense=False."""
+        """Add a conversation turn and return the newly extracted patches."""
         if self.llm_client is None:
             raise ValueError("llm_client is required to call add_turn()")
 
-        # v0.1.10: the dead-code fix. v0.1.9 defined numeric_density but
-        # never called it; the manual flag was too easy to forget, and
-        # document runs silently used the 5-patch funnel.
         dense = self.dense or numeric_density(text) >= DENSE_AUTO_THRESHOLD
         patches = extract_turn(self.llm_client, self.model, text, self.turns,
                                recent_context=self._last_context,
@@ -197,14 +205,7 @@ class DSPMMemory:
         return patches
 
     def add_document(self, text: str, chunk_tokens: int = 400) -> int:
-        """Ingest a document as sentence-aware chunks. Returns chunk count.
-
-        v0.1.10: chunks split on sentence boundaries — never mid-sentence
-        or mid-table-row (the word-count chunker in the comparison harness
-        did both). Each chunk goes through add_turn, so fact-dense
-        sections automatically get the dense extraction funnel. A single
-        sentence longer than chunk_tokens becomes its own chunk (we never
-        split inside a sentence)."""
+        """Ingest a document as sentence-aware chunks. Returns chunk count."""
         if not text or not text.strip():
             return 0
         sentences = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -224,22 +225,19 @@ class DSPMMemory:
             self.add_turn("user", ch)
         return len(chunks)
 
-    # Supersession rules (accumulated v0.1.3 → v0.1.7):
+    # Supersession rules (accumulated v0.1.3 → v0.1.15):
     #   (a)  same type + >=3 shared words + revision verb
     #   (a2) same type + same topic anchor + revision verb + changed numbers
-    #   (b)  same type + >=4 shared words + IDENTICAL number sets (restatement)
+    #   (b)  same type + >=4 shared words + IDENTICAL numbers + IDENTICAL units
+    #   (b2) same type + same slot head + >=3 shared + IDENTICAL numbers + IDENTICAL units
     #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
     #
-    # v0.1.9: when a revision supersedes stale entries, the REPLACED
-    # value is baked into the surviving payload as "(was X)" — live
-    # testing showed aggressive trimming otherwise left the correct value
-    # with no record of what it replaced. The (was X) span is atomic in
-    # trimming (see engine), so the full revision story survives.
-    #
-    # v0.1.12: the baking is history-aware — a stale patch that is
-    # itself a revision gives up its HISTORY when restated, and its full
-    # lineage when genuinely superseded (see _replaced_value).
+    # v0.1.15: rule (b2) collapses same-type restatements (user states,
+    # assistant confirms — "audit retention 5 years" vs "audit logs stored
+    # exactly 5 years" previously coexisted as duplicate criticals eating
+    # the budget). Rule (b) gains the same unit check (fixes the latent
+    # "100 per minute" vs "100 per hour" false-positive).
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical
         revision supersession."""
@@ -274,8 +272,21 @@ class DSPMMemory:
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (a2) terse revision
                         continue
-                    if len(shared) >= 4 and new_nums and new_nums == _numbers(existing.payload):
+                    # v0.1.15: (b) same-value restatement now requires
+                    # identical units (fixes "rate 100 per minute" vs
+                    # "rate 100 per hour" false-positive)
+                    if len(shared) >= 4 and new_nums and new_nums == _numbers(existing.payload) \
+                            and _units_in(patch.payload) == _units_in(existing.payload):
                         stale.append(existing)          # (b) same-value restatement
+                        continue
+                    # v0.15: (b2) restatement collapse — same topic
+                    # anchor + >=2 shared NON-NUMERIC words + identical
+                    # numbers + identical units.
+                    if (new_head and new_head == _slot_head(existing.payload)
+                            and len({w for w in shared if not re.search(r"\d", w)}) >= 2
+                            and new_nums and new_nums == _numbers(existing.payload)
+                            and _units_in(patch.payload) == _units_in(existing.payload)):
+                        stale.append(existing)          # (b2) restatement collapse
                         continue
                 else:
                     # (c) cross-type revision — >=4 words, or >=3 with marker
@@ -288,14 +299,8 @@ class DSPMMemory:
                         stale.append(existing)          # (c2) terse cross-type
                         continue
 
-        # v0.1.12: bake replaced values into the surviving payload —
-        # now history-aware. v0.1.9's baking took each stale patch's
-        # FIRST numeric word, which is its CURRENT value; when the stale
-        # patch was itself a revision, that baked a wrong "(was 10)"
-        # instead of carrying "(was 30)" forward (live webhook rematch).
+        # bake replaced values into the surviving payload
         if stale and patch.is_critical:
-            # the new patch's current value: first number outside any
-            # (was ...) span (load-time merges can carry spans in)
             patch_base = re.sub(r"\(was [^)]+\)", "", patch.payload)
             patch_nums = [w for w in patch_base.split() if re.search(r"\d", w)]
             new_current = _first_number(patch_nums[0]) if patch_nums else None
@@ -304,10 +309,6 @@ class DSPMMemory:
                 val = _replaced_value(s.payload, new_current)
                 if val:
                     replaced_vals.append(val)
-            # v0.1.14: deduplicate the joined chain across stale patches
-            # (the baseline experiment showed "(was 20 then 20)" — the
-            # same value from two stale patches, or a duplicate within
-            # one chain)
             if replaced_vals and "(was" not in patch.payload:
                 chain = _dedup_chain(replaced_vals[:2])
                 patch.payload = f"{patch.payload} (was {' then '.join(chain)})"
