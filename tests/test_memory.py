@@ -746,3 +746,57 @@ def test_prompt_value_directives_are_decisions():
         "dense prompt lacks the directive-vs-description rule"
     assert 'NOT constraints' in dense_prompt, \
         "dense prompt lost the config-description rule in the refinement"
+
+
+# ── v0.1.14: readable trimming + baking dedup regression tests ───
+# From the baseline experiment (Oct 11): DSPM tied a rolling summary
+# at equal budgets (78% each) — the guarantee works, nothing is lost,
+# but the 2-3 word payloads are too fragmented for a judge to
+# recognize ("encryption AES-256 at" is unreadable). Key nouns are
+# now priority 50 (was 30), a post-fill check guarantees the
+# constraint's subject survives alongside its number, and (was X)
+# chains are deduplicated.
+
+def test_key_noun_outranks_number_adjacent():
+    """v0.1.14: key nouns (priority 50) now outrank number-adjacent
+    words (priority 40) — 'rate 100' is more readable than
+    '100 requests' when the budget forces a choice. On v0.1.13,
+    'requests' (40) beat 'rate'/'limit' (30); now they don't."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "rate limit 100 requests per minute", 2)
+    # v0.1.13: "100 requests" (requests at 40 > rate at 30)
+    # v0.1.14: "rate 100" or "limit 100" (rate/limit at 50 > requests at 40)
+    assert ('rate' in result or 'limit' in result), \
+        f"key noun lost to number-adjacent word: {result!r}"
+    assert '100' in result, f"number lost: {result!r}"
+
+
+def test_baking_chain_no_consecutive_duplicates():
+    """v0.1.14: the (was X) chain never contains consecutive duplicate
+    values — the baseline experiment showed '(was 20 then 20)'. Chains
+    are deduplicated in _replaced_value and in the merge join."""
+    from dspm.memory import _dedup_chain
+    # unit test: consecutive duplicates are removed
+    assert _dedup_chain(["20", "20"]) == ["20"]
+    assert _dedup_chain(["300", "300", "60"]) == ["300", "60"]
+    # non-consecutive duplicates are preserved
+    assert _dedup_chain(["20", "30", "20"]) == ["20", "30", "20"]
+    # behavioral test: a revision chain produces no consecutive duplicates
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Cache TTL set to 60 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'cache TTL now 300 seconds', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
+                                 'cache TTL updated to 120 seconds', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1
+    import re as _re
+    m2 = _re.search(r"\(was ([^)]+)\)", crits[0])
+    if m2:
+        chain = m2.group(1).split(" then ")
+        for i in range(1, len(chain)):
+            assert chain[i] != chain[i - 1], \
+                f"consecutive duplicate in chain: {chain}"

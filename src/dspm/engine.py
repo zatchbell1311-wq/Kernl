@@ -17,6 +17,18 @@ too small for value + unit + history. Found in the live webhook rematch:
 8 criticals at a 59-token budget trimmed the revision to a valueless
 "10 seconds" — the replaced value vanished and the answer model
 fabricated a replacement.
+
+v0.1.14: readable starvation trimming. The baseline experiment (Oct 11)
+showed DSPM ties a rolling summary at equal budgets — the guarantee
+works, nothing is lost, but the 2-3 word payloads are too fragmented
+for a judge or answer model to recognize ("encryption AES-256 at" is
+unreadable; "encryption AES-256 at rest" is a constraint). Three fixes:
+key nouns boosted from 30 to 50 in the priority ladder; a post-fill
+guarantee that a number-bearing payload always keeps its key noun; and
+the minimal revision story now includes the subject ("timeout 10 (was
+30)" not just "10 (was 30)"). Also adds more domain key nouns from the
+baseline conversations (encryption, deployment, anonymization, sync,
+binary, battery, cold, startup, background, etc.).
 """
 
 from __future__ import annotations
@@ -53,6 +65,10 @@ class DSPMEngine:
     # Constraint subject nouns — the word that makes a bare number
     # meaningful ("timeout" in "webhook timeout 30 seconds").
     # v0.1.9: added weekdays, month names, quarters, years.
+    # v0.1.14: added domain nouns from the baseline conversations —
+    # encryption, deployment, anonymization, sync, binary, battery,
+    # cold-start, startup, background, compliance, anonymization,
+    # monitoring, alerting, backup, scaling, region, database, etc.
     _KEY_NOUNS = (
         r"(timeout|limit|rate|deadline|budget|threshold|ttl|latency|"
         r"expiry|window|quota|cap|duration|interval|retention|"
@@ -60,7 +76,11 @@ class DSPMEngine:
         r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
         r"january|february|march|april|may|june|july|august|"
         r"september|october|november|december|"
-        r"q[1-4]|20\d\d)s?"
+        r"q[1-4]|20\d\d|"
+        r"encryption|deploy|deployment|region|database|anonymization|"
+        r"compliance|sync|binary|battery|startup|background|offline|"
+        r"monitoring|alerting|backup|scaling|instance|storage|"
+        r"retention|pipeline|training|retention)s?"
     )
     # v0.1.9: temporal VALUES ("Friday", "March", "Q3", "2026") — when
     # attached to a key noun, they ARE the constraint's value and get
@@ -358,29 +378,37 @@ class DSPMEngine:
     # and at that floor the trim returns the story form "10 (was 30)"
     # (current value + history, units dropped) instead of a valueless
     # "10 seconds".
+    # v0.1.14: key nouns boosted from 30 to 50 (the subject noun makes
+    # the value meaningful — without it, "AES-256 at" is noise); a
+    # post-fill check guarantees a number-bearing payload always keeps
+    # its key noun; the minimal story includes the subject: "timeout 10
+    # (was 30)" not just "10 (was 30)"; domain nouns expanded.
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words. Number+unit pairs and '(was X)'
         replacement spans are atomic; selection priority: number-spans >
-        temporal-after-key-noun (90) > was-spans (60) > compound units
-        (50) > number-adjacent words (40) > key constraint nouns (30) >
-        proper nouns (20) > filler (10). Payloads carrying a '(was X)'
-        span at an allowance of <= 3 words return the minimal story
-        '10 (was 30)' — the revision history is never trimmed away
-        while the current value survives."""
+        temporal-after-key-noun (90) > was-spans (60) > key nouns and
+        compound units (50) > number-adjacent words (40) > proper nouns
+        (20) > filler (10). Payloads carrying a '(was X)' span at an
+        allowance of <= 3 words return the minimal story 'timeout 10
+        (was 30)' — subject + current value + history. A post-fill
+        guarantee ensures number-bearing results always include their
+        key noun (the constraint's subject)."""
         words = payload.split()
         if len(words) <= max_words:
             return payload
 
-        # ── 0. v0.1.12: minimal revision story ──────────────────────
+        # ── 0. v0.1.12/14: minimal revision story (with subject) ───
         # At tiny allowances the ladder below keeps "10 seconds" (the
         # number+unit span outranks the was-span) and DROPS the history.
         # When the payload carries "(was X)" and the allowance is too
-        # small for value + unit + history, keep the current number and
-        # the full was-span, dropping everything else (units included).
+        # small for value + unit + history, keep the KEY NOUN + current
+        # number + the full was-span, dropping everything else.
+        # v0.1.14: the subject noun is now included — "timeout 10 (was
+        # 30)" instead of just "10 (was 30)" — because a value without
+        # its subject is unreadable by downstream models.
         # Only returns when the story fits within max_words — otherwise
         # falls through to the ladder, so callers trimming toward the
-        # floor always make strict progress (no live-lock in pass 2 or
-        # the hard-cap loop).
+        # floor always make strict progress (no live-lock).
         if max_words <= 3 and any(w.lower().startswith("(was") for w in words):
             was_start = next(i for i, w in enumerate(words)
                              if w.lower().startswith("(was"))
@@ -391,11 +419,22 @@ class DSPMEngine:
             span = words[was_start:was_end + 1]
             current = next((words[i] for i in range(was_start)
                             if re.search(r"\d", words[i])), None)
-            story = ([current] + span) if current else span
-            if len(story) <= max_words:
-                return " ".join(story)
-            # story doesn't fit this allowance — fall through to the
-            # normal ladder below
+            # v0.1.14: find the key noun BEFORE the current value
+            key_noun = None
+            for i in range(was_start):
+                if re.fullmatch(self._KEY_NOUNS,
+                                words[i].lower().strip(".,;)")):
+                    key_noun = words[i]
+                    break
+            parts = ([key_noun] if key_noun else []) + \
+                     ([current] if current else []) + span
+            if len(parts) <= max_words:
+                return " ".join(parts)
+            # try without the key noun (it costs 1 word)
+            parts_no_noun = ([current] if current else []) + span
+            if len(parts_no_noun) <= max_words:
+                return " ".join(parts_no_noun)
+            # story doesn't fit — fall through to the normal ladder
 
         # ── 1. identify protected spans ──────────────────────────────
         spans = []          # (start, end, priority)
@@ -428,6 +467,7 @@ class DSPMEngine:
 
         # ── 2. score remaining standalone words ─────────────────────
         items = [(prio, -s, s, e) for (s, e, prio) in spans]
+        key_noun_words = []     # v0.1.14: track which words are key nouns
         for j, w in enumerate(words):
             if j in claimed:
                 continue
@@ -446,7 +486,8 @@ class DSPMEngine:
                   and re.fullmatch(self._TEMPORALS, w_clean)):
                 prio = 90                    # temporal value of a constraint
             elif re.fullmatch(self._KEY_NOUNS, w_clean):
-                prio = 30                    # constraint subject
+                prio = 50                    # v0.1.14: constraint subject (was 30)
+                key_noun_words.append(j)
             elif w[:1].isupper():
                 prio = 20                    # proper noun
             else:
@@ -460,6 +501,30 @@ class DSPMEngine:
             if used + (e - s + 1) <= max_words:
                 keep.update(range(s, e + 1))
                 used += (e - s + 1)
+
+        # ── 3b. v0.1.14: key-noun guarantee ─────────────────────────
+        # If the payload contains numbers but no key noun survived the
+        # greedy fill, the result is a value without context ("AES-256
+        # at" instead of "encryption AES-256 at"). Swap the lowest-
+        # priority non-number word for the highest-priority key noun.
+        has_number = any(re.search(r"\d", words[j]) for j in keep)
+        has_key_noun = any(j in key_noun_words for j in keep)
+        if has_number and not has_key_noun and key_noun_words:
+            best_noun = min(key_noun_words)  # earliest key noun
+            if best_noun not in keep:
+                # find the lowest-priority word to drop (a filler or
+                # proper noun, not a number or unit)
+                drop_candidates = [j for j in keep
+                                   if not re.search(r"\d", words[j])
+                                   and j not in claimed]
+                if drop_candidates:
+                    drop = min(drop_candidates,
+                               key=lambda j: (words[j].lower().strip(".,;)") in
+                                              [words[k].lower() for k in key_noun_words], j))
+                    # simply swap: remove the filler, add the key noun
+                    keep.discard(drop)
+                    keep.add(best_noun)
+
         return " ".join(words[j] for j in sorted(keep))
 
     def _adaptive_budgeting(self, patches: Sequence[SemanticPatch]) -> List[SemanticPatch]:

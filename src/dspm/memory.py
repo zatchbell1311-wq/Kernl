@@ -2,7 +2,7 @@
 
 v0.1.10: auto-dense extraction — add_turn() now checks
 numeric_density(text) >= DENSE_AUTO_THRESHOLD and routes fact-heavy turns
-through the dense extraction funnel even when dense=False. (v0.1.9 defined
+through the dense extraction funnel even when dense=False. (v0.11.9 defined
 numeric_density but never called it, so document tests at 70%/85% removal
 silently ran the 5-patch funnel and lost most numeric facts at extraction.)
 Also adds add_document(): sentence-aware chunking for document ingestion.
@@ -14,6 +14,10 @@ so a restated revision baked a wrong "(was 10)" instead of carrying
 "(was 30)" forward. It now detects restatements of the same revision and
 carries the history, and chains full revision lineages ("(was 300 then
 60)"). Found in the live webhook rematch.
+
+v0.1.14: baking chains are deduplicated — the baseline experiment (Oct 11)
+showed "(was 20 then 20)" (the same value baked twice) in the surviving
+payload. _replaced_value now deduplicates the chain before joining.
 """
 
 from __future__ import annotations
@@ -91,6 +95,18 @@ def _first_number(word: str) -> Optional[str]:
     return m.group() if m else None
 
 
+# v0.1.14: deduplicate a chain of values ("20 then 20" -> "20",
+# "300 then 60 then 60" -> "300 then 60"). Found in the baseline
+# experiment: "Pool size updated to 50 connections (was 20 then 20)".
+def _dedup_chain(values: List[str]) -> List[str]:
+    """Remove consecutive duplicates from a value chain, preserving order."""
+    out = []
+    for v in values:
+        if not out or v != out[-1]:
+            out.append(v)
+    return out
+
+
 # v0.1.12: the value a superseded patch gives up, for (was X) baking.
 # The live webhook rematch showed the v0.1.9 baking taking the FIRST
 # numeric word of each stale patch — correct for plain patches, wrong
@@ -98,6 +114,8 @@ def _first_number(word: str) -> Optional[str]:
 # superseded by another "10 seconds" patch baked "(was 10)" (the stale's
 # CURRENT value) instead of "(was 30)" (its history), corrupting the
 # revision story that trimming then destroyed.
+# v0.1.14: chains are deduplicated before joining (the baseline
+# experiment showed "(was 20 then 20)" — the same value twice).
 def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[str]:
     """The value a superseded patch gives up, for (was X) baking.
 
@@ -106,6 +124,8 @@ def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[
       the stale's HISTORY: "... 10 (was 30)" gives "30"
     - stale revision genuinely superseded (different value) -> the full
       lineage: "... 300 (was 60)" gives "300 then 60"
+    - v0.1.14: chains are deduplicated — "300 then 300 then 60" gives
+      "300 then 60" (the same value isn't baked twice)
     Returns None when the stale patch carries no numbers at all."""
     m = re.search(r"\(was ([^)]+)\)", stale_payload)
     history = m.group(1).strip() if m else None
@@ -121,8 +141,10 @@ def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[
         return history
     if current and history:
         # a genuinely new revision over a previously-revised patch:
-        # bake the stale's current value, chained with its history
-        return f"{current} then {history}"
+        # bake the stale's current value, chained with its history,
+        # deduplicated (v0.1.14)
+        chain = _dedup_chain([current, history])
+        return " then ".join(chain)
     return current or history
 
 
@@ -282,8 +304,13 @@ class DSPMMemory:
                 val = _replaced_value(s.payload, new_current)
                 if val:
                     replaced_vals.append(val)
+            # v0.1.14: deduplicate the joined chain across stale patches
+            # (the baseline experiment showed "(was 20 then 20)" — the
+            # same value from two stale patches, or a duplicate within
+            # one chain)
             if replaced_vals and "(was" not in patch.payload:
-                patch.payload = f"{patch.payload} (was {' then '.join(replaced_vals[:2])})"
+                chain = _dedup_chain(replaced_vals[:2])
+                patch.payload = f"{patch.payload} (was {' then '.join(chain)})"
 
         for s in stale:
             self.patches.remove(s)
