@@ -22,10 +22,25 @@ payload. _replaced_value now deduplicates the chain before joining.
 v0.1.15: restatement collapse. The baseline experiment showed duplicate
 criticals eating the budget — "audit retention 5 years" AND "audit logs
 stored for exactly 5 years" coexisting as two [CON] patches. A new rule
-(b2) collapses same-type restatements when they share a slot head, ≥3
-content words, identical numbers, and identical time/size units. Rule (b)
-gains the same unit check (fixing the latent "rate 100 per minute" vs
-"rate 100 per hour" false-positive flagged in the v0.1.13 audit).
+(b2) collapses same-type restatements when they share a slot head, ≥2
+shared non-numeric content words, identical numbers, and identical
+time/size units. Rule (b) gains the same unit check (fixing the latent
+"rate 100 per minute" vs "rate 100 per hour" false-positive flagged in the
+v0.1.13 audit).
+
+v0.1.16: bound-aware restatement collapse (reviewer finding: "100% CRR
+means the memory items remain, but important words like 'not' or 'less
+than' could still be lost"). Same numbers + same units + same slot head
+does NOT mean the same fact when the bound direction differs: "retention
+must not exceed 5 years" (upper) and "retention at least 5 years" (lower)
+share every token the v0.1.15 rules compared, so (b2) collapsed them into
+ONE critical, silently deleting a bound. Rules (b)/(b2) now require
+compatible bound/polarity classes (_bound_class): same-direction bounds
+still collapse, plain≈exact stays compatible (v0.1.15 behavior), and a
+bound never merges with a different or missing bound. Conservative by
+design — an unsolved duplicate is a budget cost; a merged contradiction
+is a wrong answer. Also passes stable_order through to the engine for
+prefix-cache-friendly output (see scripts/bench_kv_cache.py).
 """
 
 from __future__ import annotations
@@ -67,6 +82,24 @@ _TIME_SIZE_UNITS = {
     "ms", "millisecond", "second", "sec", "minute", "min",
     "hour", "hr", "day", "week", "month", "year",
     "kb", "mb", "gb", "tb", "%",
+}
+
+# v0.1.16: bound/polarity vocabulary for restatement compatibility.
+# Same numbers + same units + same slot head does NOT mean same fact
+# when the bound direction differs: "must not exceed 5 years" (upper)
+# and "at least 5 years" (lower) share every token the v0.1.15 rules
+# compared, so (b2) collapsed them — silently deleting a bound.
+_BOUND_UP = {
+    "less", "fewer", "under", "below", "within", "most", "max",
+    "maximum", "cap", "capped", "up",
+}
+_BOUND_DOWN = {
+    "more", "over", "above", "least", "min", "minimum", "floor",
+}
+_BOUND_EXACT = {"exactly", "precisely", "equal"}
+_POLARITY_NEG = {
+    "not", "no", "never", "without", "cannot", "mustn't",
+    "don't", "doesn't", "won't", "cant", "mustnt",
 }
 
 
@@ -118,6 +151,70 @@ def _units_in(text: str) -> frozenset:
         if clean.rstrip("s") in _TIME_SIZE_UNITS:
             units.add(clean.rstrip("s"))
     return frozenset(units)
+
+
+# v0.1.16: classify a payload's bound direction / polarity, so
+# value-matching collapse rules (b)/(b2) never merge contradictory
+# constraints. Index-based so "not exceed" is read as ONE signal
+# (upper) rather than negation + a bare "exceed" (which alone is a
+# LOWER bound: "must exceed 100" = strictly greater).
+def _bound_class(text: str) -> str:
+    """Return 'upper' (at most / not exceed), 'lower' (at least /
+    exceed), 'exact', 'neg' (bare negation, no bound), 'plain', or
+    'mixed' (contradictory markers)."""
+    ws = [w.lower().strip(".,;()") for w in text.split()]
+    up = down = exact = neg = False
+    i = 0
+    while i < len(ws):
+        w = ws[i]
+        if w in _POLARITY_NEG:
+            neg = True
+            nxt = ws[i + 1] if i + 1 < len(ws) else ""
+            if nxt in ("more", "over", "above") or nxt.startswith("exceed"):
+                up = True
+                i += 2
+                continue
+            if nxt in ("less", "fewer", "under", "below"):
+                down = True
+                i += 2
+                continue
+            i += 1
+            continue
+        if w in _BOUND_UP:
+            up = True
+        elif w in _BOUND_DOWN:
+            down = True
+        elif w.startswith("exceed"):
+            down = True        # bare "exceed X" = strictly greater
+        elif w in _BOUND_EXACT:
+            exact = True
+        i += 1
+    if up and down:
+        return "mixed"
+    if up:
+        return "upper"
+    if down:
+        return "lower"
+    if exact:
+        return "exact"
+    if neg:
+        return "neg"
+    return "plain"
+
+
+_BOUND_COMPAT = {
+    ("plain", "plain"), ("plain", "exact"), ("exact", "exact"),
+    ("upper", "upper"), ("lower", "lower"), ("mixed", "mixed"),
+    ("neg", "neg"),
+}
+
+
+def _polarity_compatible(a: str, b: str) -> bool:
+    """Can two payloads with identical numbers and units be the same
+    fact? Conservative: only identical classes (plus plain~exact, the
+    v0.1.15 behavior) collapse. Upper vs lower never merge; a bounded
+    statement never merges with an unbounded one."""
+    return (a, b) in _BOUND_COMPAT or (b, a) in _BOUND_COMPAT
 
 
 # v0.1.12: the numeric value inside a single word, for comparing values
@@ -179,16 +276,20 @@ class DSPMMemory:
     """
 
     def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None,
-                 model: str = "gpt-4o-mini", dense: bool = False, **kwargs: Any):
+                 model: str = "gpt-4o-mini", dense: bool = False,
+                 stable_order: bool = False, **kwargs: Any):
         self.budget = budget
         self.llm_client = llm_client
         self.model = model
         self.dense = dense
-        self.engine = DSPMEngine(budget=budget)
+        # v0.1.16: prefix-cache-friendly output ordering — see
+        # scripts/bench_kv_cache.py for why it matters.
+        self.engine = DSPMEngine(budget=budget, stable_order=stable_order)
         self.patches: List[SemanticPatch] = []
         self.turns = 0
         self.selected_patches: List[SemanticPatch] = []
         self._last_context = ""
+        self._context_built = False
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
         """Add a conversation turn and return the newly extracted patches."""
@@ -225,11 +326,14 @@ class DSPMMemory:
             self.add_turn("user", ch)
         return len(chunks)
 
-    # Supersession rules (accumulated v0.1.3 → v0.1.15):
+    # Supersession rules (accumulated v0.1.3 → v0.1.16):
     #   (a)  same type + >=3 shared words + revision verb
     #   (a2) same type + same topic anchor + revision verb + changed numbers
     #   (b)  same type + >=4 shared words + IDENTICAL numbers + IDENTICAL units
-    #   (b2) same type + same slot head + >=3 shared + IDENTICAL numbers + IDENTICAL units
+    #        + compatible bound classes (v0.1.16)
+    #   (b2) same type + same slot head + >=2 shared NON-NUMERIC words
+    #        + IDENTICAL numbers + IDENTICAL units + compatible bound
+    #        classes (v0.1.16)
     #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
     #
@@ -238,6 +342,10 @@ class DSPMMemory:
     # exactly 5 years" previously coexisted as duplicate criticals eating
     # the budget). Rule (b) gains the same unit check (fixes the latent
     # "100 per minute" vs "100 per hour" false-positive).
+    # v0.1.16: (b)/(b2) gain the bound/polarity compatibility check —
+    # "retention must not exceed 5 years" (upper) vs "retention at least
+    # 5 years" (lower) previously collapsed to one critical, silently
+    # deleting a bound.
     def _merge_patch(self, patch: SemanticPatch) -> None:
         """Merge a patch into memory with duplicate suppression and critical
         revision supersession."""
@@ -274,18 +382,25 @@ class DSPMMemory:
                         continue
                     # v0.1.15: (b) same-value restatement now requires
                     # identical units (fixes "rate 100 per minute" vs
-                    # "rate 100 per hour" false-positive)
+                    # "rate 100 per hour" false-positive); v0.1.16 adds
+                    # bound/polarity compatibility ("at most 5" is not
+                    # "at least 5").
                     if len(shared) >= 4 and new_nums and new_nums == _numbers(existing.payload) \
-                            and _units_in(patch.payload) == _units_in(existing.payload):
+                            and _units_in(patch.payload) == _units_in(existing.payload) \
+                            and _polarity_compatible(_bound_class(patch.payload),
+                                                     _bound_class(existing.payload)):
                         stale.append(existing)          # (b) same-value restatement
                         continue
-                    # v0.15: (b2) restatement collapse — same topic
+                    # v0.1.15: (b2) restatement collapse — same topic
                     # anchor + >=2 shared NON-NUMERIC words + identical
-                    # numbers + identical units.
+                    # numbers + identical units; v0.1.16 adds bound
+                    # compatibility (upper ≠ lower).
                     if (new_head and new_head == _slot_head(existing.payload)
                             and len({w for w in shared if not re.search(r"\d", w)}) >= 2
                             and new_nums and new_nums == _numbers(existing.payload)
-                            and _units_in(patch.payload) == _units_in(existing.payload)):
+                            and _units_in(patch.payload) == _units_in(existing.payload)
+                            and _polarity_compatible(_bound_class(patch.payload),
+                                                     _bound_class(existing.payload))):
                         stale.append(existing)          # (b2) restatement collapse
                         continue
                 else:
@@ -334,6 +449,7 @@ class DSPMMemory:
         self.engine.budget = self.budget
         selected, diagnostics = self.engine.compress(self.patches, query, self.turns)
         self.selected_patches = selected
+        self._context_built = True
         context = self.engine.build_context(selected)
         self._last_context = context
         return context
@@ -352,7 +468,7 @@ class DSPMMemory:
     def stats(self) -> Dict[str, Any]:
         """Return a summary of memory health, selected-critical retention, and token reduction rate."""
         critical_total = len(self.critical_patches)
-        if self.selected_patches:
+        if self._context_built:
             critical_selected = len([p for p in self.selected_patches if p.is_critical])
         else:
             critical_selected = critical_total
@@ -379,6 +495,7 @@ class DSPMMemory:
         self.selected_patches.clear()
         self.turns = 0
         self._last_context = ""
+        self._context_built = False
         self.engine.reset_ema()
 
     def set_budget(self, budget: int) -> None:

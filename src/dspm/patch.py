@@ -16,7 +16,13 @@ import hashlib
 import re
 from typing import List
 
-import tiktoken
+try:
+    # Accurate cl100k_base counting when available. The guarded import
+    # keeps the package importable (tests, benchmarks) in tiktoken-less
+    # environments; count_tokens() then uses its deterministic fallback.
+    import tiktoken
+except ImportError:  # pragma: no cover - only hit without the optional dep
+    tiktoken = None
 
 from dspm.config import MAX_PAYLOAD_CHARS, CRITICAL_TYPES, SHORT_TAGS
 
