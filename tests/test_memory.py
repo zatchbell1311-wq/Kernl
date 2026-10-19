@@ -857,3 +857,169 @@ def test_different_subjects_not_collapsed():
         f"different subjects wrongly collapsed: {crits}"
     assert any('cloud' in c.lower() for c in crits)
     assert any('training' in c.lower() for c in crits)
+
+
+# ── v0.1.16: polarity-preserving trimming + bound-aware collapse ─
+# Reviewer finding (post-v0.1.15): "100% CRR means the memory items
+# remain, but important words like 'not' or 'less than' could still
+# be lost." All six confirmed by scripts/repro_polarity_bug.py on
+# v0.1.15: the trim ladder scored negations and comparators as filler
+# (10), so "dashboard must load in under 2 seconds" trimmed to
+# "dashboard 2 seconds", "Payments must not be stored in plaintext"
+# lost "not" at the 2-word floor (meaning INVERTED), and (b2)
+# collapsed "retention must not exceed 5 years" (upper) with
+# "retention at least 5 years" (lower) — one bound silently deleted.
+
+def test_negation_survives_starvation_trim():
+    """v0.1.16: 'not' must survive a 3-word trim together with the word
+    it negates — 'Payments must not' bans nothing, and 'Payments
+    stored' bans the opposite of the constraint."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "Payments must not be stored in plaintext", 3)
+    assert "not" in result.lower(), f"negation lost: {result!r}"
+    assert "stored" in result.lower() or "plaintext" in result.lower(), \
+        f"negated word lost, negation is noise: {result!r}"
+
+
+def test_negation_binds_at_two_word_floor():
+    """v0.1.16: at the 2-word floor the negation binds to its verb —
+    'never stored' — instead of losing 'never' entirely (v0.1.15 gave
+    'Cards must', inverting the constraint)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "Cards must never be stored unencrypted", 2)
+    assert "never" in result.lower(), f"negation lost at floor: {result!r}"
+    assert "stored" in result.lower(), f"negated word lost: {result!r}"
+
+
+def test_comparator_less_than_survives_trim():
+    """v0.1.16: 'less than' binds to its number — 'latency 100
+    milliseconds' from 'latency less than 100 milliseconds' is a
+    different constraint (upper bound became an exact value)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "latency less than 100 milliseconds", 3)
+    assert "less than" in result.lower(), f"comparator lost: {result!r}"
+    assert "100" in result, f"value lost: {result!r}"
+
+
+def test_comparator_under_survives_trim():
+    """v0.1.16: 'under 2 seconds' is one atomic span — 'dashboard 2
+    seconds' reads as 'loads IN 2 seconds', not 'under'."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "dashboard must load in under 2 seconds", 3)
+    assert "under" in result.lower(), f"comparator lost: {result!r}"
+    assert "2" in result and "second" in result.lower(), \
+        f"value/unit lost: {result!r}"
+
+
+def test_comparator_degrades_gracefully():
+    """v0.1.16: when the full span cannot fit, a comparator span
+    degrades to comparator+number (direction outranks the unit) —
+    never to a bare number with its direction silently gone."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "dashboard must load in under 2 seconds", 2)
+    assert "under" in result.lower() and "2" in result, \
+        f"comparator dropped entirely at 2 words: {result!r}"
+
+
+def test_no_more_than_span_survives():
+    """v0.1.16: 'no more than 3' is one span. v0.1.15 produced the
+    garbled 'no more 3 retries' ('than' was filler)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "allow no more than 3 retries", 4)
+    assert "no more than" in result.lower() and "3" in result, \
+        f"'no more than' span broken: {result!r}"
+
+
+def test_bound_class_classification():
+    """v0.1.16 unit test: _bound_class reads bound direction correctly,
+    including 'not exceed' (upper) vs bare 'exceed' (lower)."""
+    from dspm.memory import _bound_class
+    assert _bound_class("retention must not exceed 5 years") == "upper"
+    assert _bound_class("retention no more than 5 years") == "upper"
+    assert _bound_class("retention at least 5 years") == "lower"
+    assert _bound_class("latency must exceed 100 ms") == "lower"
+    assert _bound_class("retention exactly 5 years") == "exact"
+    assert _bound_class("retention 5 years") == "plain"
+    assert _bound_class("must not be stored") == "neg"
+
+
+def test_contradictory_bounds_not_collapsed():
+    """v0.1.16: an upper bound and a lower bound on the same slot, same
+    number, same unit are DIFFERENT constraints — v0.1.15's (b2)
+    collapsed them into one critical, silently deleting a bound."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Audit retention must not exceed 5 years', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Audit retention at least 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, \
+        f"contradictory bounds collapsed (v0.1.16 fix): {crits}"
+    assert any('exceed' in c.lower() for c in crits)
+    assert any('least' in c.lower() for c in crits)
+
+
+def test_same_direction_bounds_still_collapse():
+    """v0.1.16 guard: restatements with the SAME bound direction still
+    collapse — 'no more than 5 years' and 'must not exceed 5 years'
+    are the same fact."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Audit retention no more than 5 years', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Audit retention must not exceed 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"same-direction bounds should collapse: {crits}"
+    assert '5' in crits[0]
+
+
+def test_polarity_words_survive_end_to_end():
+    """v0.1.16 end-to-end: at a starvation budget the compressed
+    context keeps 'not', 'under', and 'less than' — CRR was already
+    100 on v0.1.15, but the MEANING was not."""
+    m = DSPMMemory(budget=40)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Dashboard must load in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Payments must not be stored in plaintext', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'constraint',
+                                 'Latency less than 100 milliseconds', []))
+    m._merge_patch(SemanticPatch('p3_0', 3, 'constraint',
+                                 'Rate limit 100 requests per minute', []))
+    ctx = m.get_context(query='hard requirements')
+    assert 'not' in ctx.lower(), f"negation lost end-to-end: {ctx!r}"
+    assert 'under' in ctx.lower(), f"comparator lost end-to-end: {ctx!r}"
+    assert 'less than' in ctx.lower(), f"comparator lost end-to-end: {ctx!r}"
+    assert m.stats['crr'] == 100
+
+
+def test_crr_reports_zero_when_budget_excludes_all_criticals():
+    m = DSPMMemory(budget=4)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint', 'Must NOT use Redis', []))
+    assert m.stats['crr'] == 100
+    ctx = m.get_context(query='redis')
+    assert ctx == ''
+    assert m.stats['crr'] == 0
+
+
+def test_reset_resets_crr_contract():
+    m = DSPMMemory(budget=4)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint', 'Must NOT use Redis', []))
+    m.get_context(query='redis')
+    assert m.stats['crr'] == 0
+    m.reset()
+    m._merge_patch(SemanticPatch('p1_0', 0, 'constraint', 'Use Postgres', []))
+    assert m.stats['crr'] == 100

@@ -19,3 +19,6 @@ skills-lock.json
 brag-output/
 .agents/
 skills-lock.json
+/bench_kv_cache_results.json
+experiments/bench_kv_cache_results.json
+_fix_e_round.py
