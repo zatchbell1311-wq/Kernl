@@ -245,6 +245,10 @@ class DSPMEngine:
         constant and never affected ranking. Older patches now decay
         relative to the current turn, matching the paper's description.
         The default keeps backward compatibility for direct callers."""
+        # recency reference can never be older than the newest patch
+        if patches:
+            current_turn = max(current_turn,
+                               max(p.turn_index for p in patches))
         type_boost = {
             'constraint': 0.20,
             'decision': 0.18,
