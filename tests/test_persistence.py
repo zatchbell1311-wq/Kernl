@@ -118,3 +118,31 @@ class TestSaveLoad:
         m.save(path)
         m2 = DSPMMemory(budget=250)
         assert m2.load(path) == 2
+class TestRoleAndTokenAccounting:
+    """v0.1.17 review points 2+4 through the notebook format."""
+
+    def test_source_role_roundtrips_through_save_load(self, tmp_path):
+        m1 = DSPMMemory(budget=250)
+        p = _mk_patch("p0_0", 0, "constraint", "PCI-DSS compliance required")
+        p.source_role = "user"
+        m1._merge_patch(p)
+        d = _mk_patch("p1_0", 1, "decision", "fee cap set to 0.5% as tracked")
+        d.source_role = "assistant"
+        m1._merge_patch(d)
+        path = str(tmp_path / "mem.json")
+        m1.save(path)
+        m2 = DSPMMemory(budget=250)
+        assert m2.load(path) == 2
+        roles = {p.payload: p.source_role for p in m2.all_patches}
+        assert roles["PCI-DSS compliance required"] == "user", roles
+        assert roles["fee cap set to 0.5% as tracked"] == "assistant", roles
+
+    def test_conversation_tokens_roundtrip(self, tmp_path):
+        m1 = DSPMMemory(budget=250)
+        m1._conversation_tokens = 137
+        m1._merge_patch(_mk_patch("p0_0", 0, "constraint", "must work offline"))
+        path = str(tmp_path / "mem.json")
+        m1.save(path)
+        m2 = DSPMMemory(budget=250)
+        m2.load(path)
+        assert m2._conversation_tokens == 137, m2._conversation_tokens

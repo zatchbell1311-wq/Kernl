@@ -51,6 +51,19 @@ dropped); (3) the (was X) chain keeps the three most recently replaced
 values (the old [:2] cap silently deleted the third-oldest value when
 one revision superseded three stale criticals); (4) stats.selected
 reports delivered patches post-build, store size pre-build.
+v0.1.17 (unpublished, F5 batch): rule (b4) bridges thin cross-type
+extraction echoes -- a bound-word slot head that agrees with its own
+bound direction, the other side's slot head being the shared subject
+noun, within two turns. The frozen fee pair held the nominal store
+at 6 against the smoke's 7-critical delivery cap, so 6/20 live runs
+tipped to 8 and CRR fell to 87%. A canary test freezes the remaining
+word-overlap limitation (same-value bounds sharing only a scope noun
+still merge; structured slot supersession is the planned next step,
+reviewer point 3). Same batch: patches carry source_role through the
+store and the notebook (reviewer point 2), stats splits conversation
+/ patch / context tokens (reviewer point 4), and the (was X) span
+stays the machine-readable revision story the starvation trim
+protects -- prose is droppable, the span is not.
 """
 
 from __future__ import annotations
@@ -243,6 +256,25 @@ def _polarity_compatible(a: str, b: str) -> bool:
     return (a, b) in _BOUND_COMPAT or (b, a) in _BOUND_COMPAT
 
 
+# v0.1.17 (finding S2): bound words that can serve as a slot head and
+# bridge a thin cross-type echo (rule (b4)).
+_BOUND_HEAD_WORDS = frozenset(_BOUND_UP | _BOUND_DOWN | _BOUND_EXACT)
+
+
+def _head_direction(head: str) -> str:
+    """Direction class implied by a bound-word slot head. The head must
+    agree with its OWN payload's bound class to bridge: 'No more than 5'
+    is an upper bound whose head 'more' is a lower-bound word, so it
+    never bridges (guarded by test_no_more_than_head_direction_mismatch_stays)."""
+    if head in _BOUND_UP:
+        return "upper"
+    if head in _BOUND_DOWN:
+        return "lower"
+    if head in _BOUND_EXACT:
+        return "exact"
+    return "plain"
+
+
 # v0.1.12: the numeric value inside a single word, for comparing values
 # across payloads ("30)" -> "30", "0.5%," -> "0.5").
 def _first_number(word: str) -> Optional[str]:
@@ -303,7 +335,8 @@ class DSPMMemory:
 
     def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None,
                  model: str = "gpt-4o-mini", dense: bool = False,
-                 stable_order: bool = False, **kwargs: Any):
+                 stable_order: bool = False, render_source_roles: bool = False,
+                 **kwargs: Any):
         self.budget = budget
         self.llm_client = llm_client
         self.model = model
@@ -316,6 +349,17 @@ class DSPMMemory:
         self.selected_patches: List[SemanticPatch] = []
         self._last_context = ""
         self._context_built = False
+        # v0.1.17 (review points 2+4): source attribution + input-token
+        # accounting. _conversation_tokens counts the RAW turn text fed
+        # into add_turn (the extraction INPUT), separate from
+        # patch_tokens (extraction OUTPUT) and context_tokens (the
+        # delivered result) -- the reviewer's point: raw_tokens measured
+        # extracted patches and was easy to misread as conversation size.
+        self._conversation_tokens = 0
+        # v0.1.17 (review point 2): optional '(role)' suffix on delivered
+        # lines. Off by default -- it costs ~2 tokens per delivered line
+        # and budgets were sized without it.
+        self.render_source_roles = bool(render_source_roles)
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
         """Add a conversation turn and return the newly extracted patches."""
@@ -329,7 +373,15 @@ class DSPMMemory:
                                role=role,
                                recent_context=self._last_context,
                                dense=dense)
+        # v0.1.17 (review point 4): the raw turn text is the extraction
+        # INPUT -- counted whether or not extraction succeeds.
+        self._conversation_tokens += count_tokens(text)
         for p in patches:
+            # v0.1.17 (review point 2, data path): attribution rides on
+            # the patch. The extractor PROMPT has carried the role since
+            # the F2 batch; the store could not tell a user requirement
+            # from an assistant echo.
+            p.source_role = role
             self._merge_patch(p)
         self.turns += 1
         return patches
@@ -370,6 +422,11 @@ class DSPMMemory:
     #        compatible bounds, at least one directional/exact bound
     #        (v0.1.17 finding S1 -- live smoke showed user [CON] +
     #        assistant [DEC] echoes coexisting as duplicate criticals)
+    #   (b4) cross-type thin echo: bound-word slot head on one side,
+    #        shared subject noun as the other slot head, <=2 turns
+    #        apart (v0.1.17 finding S2 -- the frozen fee pair held
+    #        the store at 6 against the 7-critical delivery cap;
+    #        6/20 live runs tipped to 8 and CRR fell to 87%)
     #
     # v0.1.15: rule (b2) collapses same-type restatements (user states,
     # assistant confirms — "audit retention 5 years" vs "audit logs stored
@@ -459,11 +516,9 @@ class DSPMMemory:
                     # additionally requires at least one directional or
                     # exact bound, because cross-type merges are riskier
                     # ('Budget 100 for cloud' vs 'Budget 100 for training'
-                    # is plain/plain and must stay apart). Known residual,
-                    # frozen by test: thin restatements sharing ONE
-                    # non-numeric word ('Maximum fee ... 0.5%' vs 'fee cap
-                    # ... 0.5%') stay -- collapsing them would also merge
-                    # tier-scoped facts with identical numbers.
+                    # is plain/plain and must stay apart). The thin-restatement
+                    # freeze on this rule was lifted in finding S2 -- see (b4)
+                    # below for the guarded bridge that replaced it.
                     bc_new = _bound_class(patch.payload)
                     bc_old = _bound_class(existing.payload)
                     if (new_head and new_head == _slot_head(existing.payload)
@@ -473,6 +528,42 @@ class DSPMMemory:
                             and _polarity_compatible(bc_new, bc_old)
                             and not (bc_new == "plain" and bc_old == "plain")):
                         stale.append(existing)          # (b3) cross-type restatement
+                        continue
+                    # v0.1.17 (finding S2): (b4) bound-head bridge for thin
+                    # cross-type echoes. The 20-run live loop still failed
+                    # CRR 87% (7/8 delivered) on 30% of runs: the frozen
+                    # fee pair held the nominal store at 6 against a
+                    # 7-critical delivery cap, so two extraction variants
+                    # tipped a run to 8. The fee pair's shape: one side
+                    # leads with a BOUND WORD ('Maximum fee ... 0.5%') and
+                    # the other leads with the shared subject noun
+                    # ('fee cap set to 0.5%'). Bridge conditions, all
+                    # required: the bound-word head agrees with its OWN
+                    # payload's bound direction ('No more than ...' does
+                    # NOT bridge -- its head 'more' is a lower-bound word
+                    # inside an upper-bound sentence), the other side's
+                    # slot head IS a shared content word, and the pair
+                    # sits within two turns (extraction echoes are
+                    # adjacent; tier-scoped facts stated turns apart are
+                    # not). Canary-frozen limitation: same-value bounds
+                    # sharing only a scope noun still merge ('Max users
+                    # 500 per org' + 'org admins cap 500') -- structured
+                    # slot supersession is the planned next fix
+                    # (reviewer point 3).
+                    old_head = _slot_head(existing.payload)
+                    shared_nonnum = {w for w in shared if not re.search(r"\d", w)}
+                    if (new_nums and new_nums == _numbers(existing.payload)
+                            and _units_in(patch.payload) == _units_in(existing.payload)
+                            and _polarity_compatible(bc_new, bc_old)
+                            and not (bc_new == "plain" and bc_old == "plain")
+                            and abs(patch.turn_index - existing.turn_index) <= 2
+                            and ((new_head in _BOUND_HEAD_WORDS
+                                  and _head_direction(new_head) == bc_new
+                                  and old_head in shared_nonnum)
+                                 or (old_head in _BOUND_HEAD_WORDS
+                                     and _head_direction(old_head) == bc_old
+                                     and new_head in shared_nonnum))):
+                        stale.append(existing)          # (b4) thin echo bridge
                         continue
 
         # bake replaced values into the surviving payload
@@ -521,6 +612,15 @@ class DSPMMemory:
         self.selected_patches = selected
         self._context_built = True
         context = self.engine.build_context(selected)
+        # v0.1.17 (review point 2): optional role attribution on delivered
+        # lines, when render_source_roles=True and the patch carries a
+        # role. Rendered AFTER selection, so it never changes what the
+        # engine picks -- only what the reader sees about who said it.
+        if self.render_source_roles:
+            context = "\n".join(
+                f"{p.to_prompt_str()} ({p.source_role})"
+                if p.source_role else p.to_prompt_str()
+                for p in selected) or context
         self._last_context = context
         return context
 
@@ -546,6 +646,11 @@ class DSPMMemory:
         behind a perfect reduction number. TRR keeps its raw formula:
         clamping a negative reduction would be metric gaming, and
         raw_tokens / context_tokens stay exposed for audit.
+        v0.1.17 (review point 4): conversation_tokens (raw turn
+        text fed to add_turn) and patch_tokens (alias of
+        raw_tokens -- the EXTRACTED patches) make the three-way
+        split explicit, so nobody mistakes patch tokens for
+        conversation size again.
         """
         critical_total = len(self.critical_patches)
         if self._context_built:
@@ -562,6 +667,10 @@ class DSPMMemory:
         # quoting "100% CRR" show the number was measured on a delivered
         # context, not assumed.
         selected_count = len(self.selected_patches) if self._context_built else len(self.patches)
+        roles: Dict[str, int] = {}
+        for p in self.critical_patches:
+            key = p.source_role or "unattributed"
+            roles[key] = roles.get(key, 0) + 1
         return {
             "turns": self.turns,
             "total_patches": len(self.patches),
@@ -572,9 +681,14 @@ class DSPMMemory:
             "selected": selected_count,
             "budget": self.budget,
             "dense": self.dense,
+            "conversation_tokens": self._conversation_tokens,
             "raw_tokens": raw_tokens,
+            "patch_tokens": raw_tokens,
             "context_tokens": context_tokens,
             "trr": trr,
+            # v0.1.17 (review point 2): attribution census for criticals
+            # -- 'unattributed' covers pre-0.1.17 notebooks.
+            "critical_by_role": dict(sorted(roles.items())),
         }
 
     def reset(self) -> None:
@@ -584,6 +698,7 @@ class DSPMMemory:
         self.turns = 0
         self._last_context = ""
         self._context_built = False
+        self._conversation_tokens = 0
         self.engine.reset_ema()
 
     def set_budget(self, budget: int) -> None:

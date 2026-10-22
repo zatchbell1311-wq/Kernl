@@ -1150,16 +1150,23 @@ def test_cross_type_retention_restatement_collapses():
         f"cross-type retention restatement should collapse: {crits}"
 
 
-def test_cross_type_thin_shared_restatement_stays():
-    """Known residual, frozen deliberately: the live fee pair shares only
-    ONE non-numeric word ('fee'); collapsing it would also merge
-    tier-scoped facts ('Fee capped 0.5% cloud tier' vs 'premium tier')."""
+def test_cross_type_thin_shared_fee_pair_collapses():
+    """v0.1.17 finding S2 unfreezes this pair. The 20-run live loop kept
+    failing CRR at 87% (7/8 delivered) on 30% of runs: this frozen fee
+    pair held the nominal store at 6 against the smoke's 7-critical
+    delivery cap, so two extraction variants tipped a run to 8. Rule
+    (b4) bridges it -- bound-word slot head ('Maximum ...') agreeing
+    with its own direction, shared subject noun as the other slot head,
+    within two turns. The tier danger the freeze guarded against is now
+    separately frozen by test_bound_head_bridge_keeps_tier_scoped_fees
+    and test_bound_head_bridge_keeps_gold_silver_tiers."""
     m = DSPMMemory(budget=250)
     m._merge_patch(SemanticPatch('s0', 0, 'constraint',
                                  'Maximum fee per transaction is limited to 0.5%', []))
     m._merge_patch(SemanticPatch('s1', 1, 'decision',
                                  'fee cap set to 0.5% as tracked', []))
-    assert len(m.critical_patches) == 2
+    assert len(m.critical_patches) == 1, \
+        f"bound-head bridge should collapse the fee echo: {[p.payload for p in m.critical_patches]}"
 
 
 def test_cross_type_contradictory_bounds_not_collapsed():
@@ -1220,3 +1227,163 @@ def test_units_scan_hyphenated_tokens():
     assert _units_in("24-hour window") == frozenset({"hour"})
     # sanity: plain tokens unchanged
     assert _units_in("timeout 30 seconds") == frozenset({"second"})
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 finding S2 (20-run live loop: 6/20 runs at CRR 87% = 7/8) plus
+# the external review's actionable points. (b4) bridges thin cross-type
+# echoes via a bound-word slot head; the bake stops telling a value
+# twice; source_role and the three-way token split answer review points
+# 2 and 4. CRR-on-empty-selection (review point 1) was fixed in the F2
+# batch and is already pinned above.
+# ---------------------------------------------------------------------------
+
+
+def test_fee_cap_bridge_symmetric_direction():
+    """The bridge is direction-agnostic: DEC first, CON echo second."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    assert len(m.critical_patches) == 1, \
+        f"symmetric fee echo should collapse: {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_canary_scope_noun_merges():
+    """KNOWN LIMITATION, frozen deliberately (review point 3): word overlap
+    cannot tell 'Max users 500 per org' from 'org admins cap 500' -- same
+    value, same direction, shared scope noun 'org', bound-word head 'max'.
+    (b4) merges this pair. The structured slot supersession planned for
+    the next batch is the fix; when it lands, this canary is the test to flip."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Max users 500 per org', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'org admins cap 500', []))
+    assert len(m.critical_patches) == 1, \
+        f"canary: (b4) merges scope-noun pairs (documented): {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_keeps_tier_scoped_fees():
+    """The case the old freeze protected: bound-word head, but the other
+    side's head ('silver') is NOT the shared subject noun -- the pair
+    shares only 'fee' and the qualifiers differ. Must stay apart."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum platinum fee is 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'silver tier fee cap 0.5%', []))
+    assert len(m.critical_patches) == 2, \
+        f"tier-scoped fees merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_keeps_gold_silver_tiers():
+    """No bound-word head on either side -> no bridge, regardless of the
+    identical value and direction."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Gold tier fee capped at 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Silver tier fee capped at 0.5%', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_requires_echo_proximity():
+    """Beyond two turns the bridge closes: extraction echoes are adjacent;
+    distant restatements with thin overlap are not worth the risk."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 5, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_keeps_different_values():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee cap set to 1% as tracked', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_keeps_contradictory_bounds():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee floor 0.5%', []))
+    assert len(m.critical_patches) == 2, \
+        f"contradictory bounds merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_no_more_than_head_direction_mismatch_stays():
+    """'No more than 500 records per page' IS an upper bound, but its
+    slot head 'more' is a LOWER-bound word inside an upper-bound
+    sentence -- the head-direction agreement requirement exists exactly
+    so negated bounds never bridge. Same fact, kept apart: conservative
+    is correct for a rule this deep in the risk curve."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'No more than 500 records per page', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'page size capped at 500', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_source_role_rides_on_add_turn():
+    """Review point 2, storage half: the F2 batch threaded the role into
+    the extractor prompt; it must also ride on the extracted patches."""
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    patches = mem.add_turn('assistant', 'I will always return JSON output.')
+    assert patches, "extraction returned no patches"
+    assert all(p.source_role == 'assistant' for p in patches), \
+        [p.source_role for p in patches]
+
+
+def test_render_source_roles_flag():
+    """Role attribution renders only when asked for -- it costs tokens."""
+    m = DSPMMemory(budget=250)
+    p = SemanticPatch('r0', 0, 'constraint', 'fee cap set to 0.5% as tracked', [])
+    p.source_role = 'user'
+    m._merge_patch(p)
+    assert '(user)' not in m.get_context('fee')       # off by default
+    m2 = DSPMMemory(budget=250, render_source_roles=True)
+    p2 = SemanticPatch('r1', 0, 'constraint', 'fee cap set to 0.5% as tracked', [])
+    p2.source_role = 'user'
+    m2._merge_patch(p2)
+    assert '(user)' in m2.get_context('fee')
+
+
+def test_stats_reports_critical_roles():
+    m = DSPMMemory(budget=250)
+    p = SemanticPatch('a0', 0, 'constraint', 'PCI-DSS compliance required', [])
+    p.source_role = 'user'
+    m._merge_patch(p)
+    d = SemanticPatch('a1', 1, 'decision', 'dashboard loads in under 2 seconds', [])
+    d.source_role = 'assistant'
+    m._merge_patch(d)
+    assert m.stats['critical_by_role'] == {'user': 1, 'assistant': 1}
+
+
+def test_stats_separates_conversation_patch_context_tokens():
+    """Review point 4: conversation_tokens counts the RAW turn text fed
+    to add_turn; patch_tokens (alias raw_tokens) counts the extracted
+    patches; context_tokens counts the delivery."""
+    from dspm.patch import count_tokens
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    t1 = 'Return JSON and use POST /v1/items for creation.'
+    t2 = 'All API responses must include a request id header.'
+    mem.add_turn('user', t1)
+    mem.add_turn('assistant', t2)
+    s = mem.stats
+    assert s['conversation_tokens'] == count_tokens(t1) + count_tokens(t2), s
+    assert s['patch_tokens'] == s['raw_tokens'] > 0
+    mem.get_context('json')
+    s2 = mem.stats
+    assert s2['context_tokens'] > 0
+    assert s2['patch_tokens'] >= s2['context_tokens'], s2

@@ -12,6 +12,12 @@ v0.1.10: load_memory() now returns 0 for a corrupted or truncated
 notebook file instead of raising — matching the defensive posture of
 _record_to_patch, which already skips malformed records individually.
 Unused typing.List import removed. No schema change.
+
+v0.1.17: patch records carry source_role (review point 2 -- speaker
+attribution survives save/load), and the notebook header carries
+conversation_tokens (review point 4 -- the raw input size that produced
+it; loads additively under merge semantics). Both are optional keys:
+pre-0.1.17 files load as unattributed / zero.
 """
 
 from __future__ import annotations
@@ -36,6 +42,9 @@ def _patch_to_record(p: SemanticPatch) -> Dict[str, Any]:
         "patch_type": p.patch_type,
         "payload": p.payload,
         "dependencies": list(p.dependencies),
+        # v0.1.17 (review point 2): speaker attribution rides the record;
+        # old readers ignore unknown fields, old files load as None.
+        "source_role": getattr(p, "source_role", None),
     }
 
 
@@ -55,6 +64,7 @@ def _record_to_patch(d: Dict[str, Any]) -> Optional[SemanticPatch]:
             patch_type=str(d["patch_type"]),
             payload=str(d["payload"]),
             dependencies=[str(x) for x in deps],
+            source_role=(str(d["source_role"]) if d.get("source_role") else None),
         )
     except (TypeError, ValueError):
         return None
@@ -63,7 +73,12 @@ def _record_to_patch(d: Dict[str, Any]) -> Optional[SemanticPatch]:
 def save_memory(memory, path: str) -> int:
     """Write the notebook to `path` (atomic write). Returns patches saved."""
     records = [_patch_to_record(p) for p in memory.patches]
-    payload = {"schema": _SCHEMA_VERSION, "turns": memory.turns, "patches": records}
+    # v0.1.17 (review point 4): record the raw input tokens of the turns
+    # that produced this notebook, so a merged session can still report
+    # what the conversation cost.
+    payload = {"schema": _SCHEMA_VERSION, "turns": memory.turns,
+               "conversation_tokens": getattr(memory, "_conversation_tokens", 0),
+               "patches": records}
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -104,4 +119,9 @@ def load_memory(memory, path: str) -> int:
             loaded += 1
     if isinstance(data, dict) and data.get("turns"):
         memory.turns = max(memory.turns, int(data["turns"]))
+    # v0.1.17 (review point 4): merge semantics -- loaded notebooks add
+    # their recorded input tokens to this session's counter.
+    if isinstance(data, dict) and data.get("conversation_tokens"):
+        base = getattr(memory, "_conversation_tokens", 0)
+        memory._conversation_tokens = base + int(data["conversation_tokens"])
     return loaded
