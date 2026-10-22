@@ -1023,3 +1023,200 @@ def test_reset_resets_crr_contract():
     m.reset()
     m._merge_patch(SemanticPatch('p1_0', 0, 'constraint', 'Use Postgres', []))
     assert m.stats['crr'] == 100
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 review-fix regressions: role threading, stats delivery flag,
+# and the bake cap for supersession chains deeper than two.
+# ---------------------------------------------------------------------------
+
+def _mk_crit(pid, payload, turn):
+    """Manual critical patch mirroring the MockLLMClient JSON field set."""
+    return SemanticPatch(
+        patch_id=pid, turn_index=turn, patch_type="constraint",
+        payload=payload, dependencies=[], utility=0.9,
+        fingerprint="", slot_key="", is_delta=False, delta_base="",
+        causal_depth=0)
+
+
+def test_role_threaded_into_extractor_prompt():
+    llm = PromptCapturingClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    mem.add_turn('assistant', 'I will always return JSON output.')
+    assert '[assistant]' in llm.user_messages[0], llm.user_messages[0]
+
+
+def test_role_defaults_to_user_when_extracting_directly():
+    from dspm.extractor import extract_turn
+    llm = KwargCapturingClient()
+    extract_turn(llm, 'test-model', 'Always return JSON.', 0)
+    assert '[user]' in llm.calls[0]["messages"][1]["content"]
+
+
+def test_stats_exposes_delivery_flag_and_selected_count():
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
+    s = mem.stats
+    assert s["context_built"] is False
+    assert s["selected"] == s["total_patches"]      # pre-build: store size
+    mem.get_context(query="overview")
+    s2 = mem.stats
+    assert s2["context_built"] is True
+    assert s2["selected"] <= s2["total_patches"]    # post-build: delivered
+
+
+def test_single_revision_bakes_three_superseded_values():
+    mem = DSPMMemory(budget=400)
+    mem._merge_patch(_mk_crit("c0", "webhook timeout 30 seconds", 0))
+    mem._merge_patch(_mk_crit("c1", "webhook timeout 20 seconds", 1))
+    mem._merge_patch(_mk_crit("c2", "webhook timeout 15 seconds", 2))
+    rev = _mk_crit("c3", "webhook timeout updated to 10 seconds", 3)
+    mem._merge_patch(rev)
+    assert "(was" in rev.payload, rev.payload
+    for old_val in ("30", "20", "15"):
+        assert old_val in rev.payload, rev.payload   # v0.1.16 lost the 15
+    assert len([p for p in mem.all_patches if p.is_critical]) == 1
+
+
+def test_extractor_remaps_forward_dependency_references():
+    from dspm.extractor import extract_turn
+    content = json.dumps([
+        {"patch_id": "child", "patch_type": "decision",
+         "payload": "Deploy after approval", "dependencies": ["parent"]},
+        {"patch_id": "parent", "patch_type": "constraint",
+         "payload": "Approval is required", "dependencies": []},
+    ])
+    patches = extract_turn(KwargCapturingClient(content), 'test-model',
+                           'Approval is required, then deploy.', 5)
+    assert [p.patch_id for p in patches] == ["p5_0", "p5_1"]
+    assert patches[0].dependencies == ["p5_1"]
+
+
+def test_unit_aliases_distinguish_milliseconds_from_seconds():
+    from dspm.memory import _units_in
+    assert _units_in("webhook timeout 100 ms") == frozenset({"ms"})
+    assert _units_in("webhook timeout 100 s") == frozenset({"second"})
+    assert _units_in("timeout 30 s") == _units_in("timeout 30 seconds")
+
+
+def test_cant_is_recognized_as_negative_polarity():
+    from dspm.memory import _bound_class
+    assert _bound_class("retention can't exceed 5 years") == "upper"
+    assert _bound_class("retention at least 5 years") == "lower"
+
+
+def test_baked_revision_recounts_token_cost():
+    from dspm.patch import count_tokens
+    mem = DSPMMemory(budget=400)
+    mem._merge_patch(_mk_crit("c0", "webhook timeout 30 seconds", 0))
+    mem._merge_patch(_mk_crit("c1", "webhook timeout 20 seconds", 1))
+    rev = _mk_crit("c2", "webhook timeout updated to 10 seconds", 2)
+    mem._merge_patch(rev)
+    assert rev.token_cost == count_tokens(rev.to_prompt_str())
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 finding S1 (live conversation smoke): cross-type CON<->DEC
+# restatements collapsed; "sub-" reads as an upper bound; units scan
+# hyphenated tokens. Live evidence (DIAG dump): 'Maximum fee per
+# transaction is limited to 0.5%' [CON] + 'fee cap set to 0.5% as tracked'
+# [DEC], and 'dashboard must load in under 2 seconds' [DEC] +
+# 'Dashboard latency must be sub-2-second' [CON], coexisted as duplicate
+# criticals; the store bloated to 8-10 and CRR fell to 70-87% at the
+# smoke's 59-token budget.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_type_dashboard_restatement_collapses():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 6, 'decision',
+                                 'dashboard must load in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 7, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"cross-type dashboard restatement should collapse: {crits}"
+
+
+def test_cross_type_retention_restatement_collapses():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'Audit retention set to 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Audit logs stored for exactly 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"cross-type retention restatement should collapse: {crits}"
+
+
+def test_cross_type_thin_shared_restatement_stays():
+    """Known residual, frozen deliberately: the live fee pair shares only
+    ONE non-numeric word ('fee'); collapsing it would also merge
+    tier-scoped facts ('Fee capped 0.5% cloud tier' vs 'premium tier')."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_cross_type_contradictory_bounds_not_collapsed():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'Audit retention must not exceed 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Audit retention at least 5 years', []))
+    assert len(m.critical_patches) == 2, \
+        f"contradictory cross-type bounds merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_cross_type_same_subject_pages_not_collapsed():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Dashboard loads in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Homepage loads in under 2 seconds', []))
+    assert len(m.critical_patches) == 2, \
+        f"different subjects merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_cross_type_plain_values_not_collapsed():
+    """Both-plain guard: no directional/exact bound, one shared word --
+    'Budget 100 for cloud' vs 'Budget 100 for training' must stay apart."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Budget 100 for cloud', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Budget 100 for training', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_cross_type_revision_supersedes_unchanged():
+    """(b3) must not disturb (c): a real cross-type revision with changed
+    numbers still supersedes and bakes history."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Updated webhook timeout changed to 10 seconds instead', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, crits
+    assert '(was' in crits[0] and '30' in crits[0], crits
+
+
+def test_sub_prefix_reads_as_upper_bound():
+    from dspm.memory import _bound_class
+    assert _bound_class("Dashboard latency must be sub-2-second") == "upper"
+    # sanity: prior vocabulary unchanged
+    assert _bound_class("retention must not exceed 5 years") == "upper"
+    assert _bound_class("retention exactly 5 years") == "exact"
+
+
+def test_units_scan_hyphenated_tokens():
+    from dspm.memory import _units_in
+    assert _units_in("Dashboard latency must be sub-2-second") == frozenset({"second"})
+    assert _units_in("24-hour window") == frozenset({"hour"})
+    # sanity: plain tokens unchanged
+    assert _units_in("timeout 30 seconds") == frozenset({"second"})

@@ -30,6 +30,14 @@ prompts now distinguish value DIRECTIVES (always decisions) from
 detached configuration DESCRIPTIONS (code/structure). New live gate:
 scripts/smoke_conversation.py — extraction-layer changes now require
 BOTH smoke tests green before release.
+
+v0.1.17: role threading (review point 2) -- the speaker label rides
+the turn line, telling binding user directives from assistant
+restatements. Finding F1: LLM-declared dependency ids are remapped
+to the stored p{turn}_{k} ids via a two-pass construction --
+previously deps were copied verbatim and always dangled, leaving T4
+and W_DEP dead. Extraction-layer change: both smoke gates must be
+green before release.
 """
 
 from __future__ import annotations
@@ -201,7 +209,8 @@ def _build_system_prompt(dense: bool = False) -> str:
 def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
                  recent_context: str = '', dense: bool = False,
                  max_tokens: Optional[int] = None,
-                 reasoning_effort: Optional[str] = None) -> List[SemanticPatch]:
+                 reasoning_effort: Optional[str] = None,
+                 role: str = 'user') -> List[SemanticPatch]:
     """Extract semantic patches from a conversation turn using an LLM client.
 
     `dense=True` widens the extraction funnel — more patches allowed,
@@ -218,14 +227,23 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
                    models (extraction is a structured-output task, not a
                    reasoning task), nothing for other models. Pass
                    "low"/"medium"/"high" to force it for any model that
-                   supports the parameter."""
+                   supports the parameter.
+    role -- v0.1.16: speaker label for the turn ('user'/'assistant'/...),
+    threaded into the prompt so the extractor knows who spoke;
+    add_turn() previously accepted the role and silently dropped it."""
     if llm_client is None:
         raise ValueError("llm_client is required to extract semantic patches")
 
     system_prompt = _build_system_prompt(dense=dense)
+    # v0.1.17 (review point 2): the speaker role rides on the turn line so
+    # the extractor can tell a binding user directive ("always return JSON")
+    # from an assistant restatement. add_turn(role, ...) used to accept the
+    # role and then drop it on the floor. Information-only: classification
+    # rules are unchanged, so behavior on existing transcripts is identical
+    # apart from the added label.
     user_content = (
-        f"Recent context:\n{recent_context}\n\nTurn {turn_index}:\n{turn_text}"
-        if recent_context else f"Turn {turn_index}:\n{turn_text}"
+        f"Recent context:\n{recent_context}\n\nTurn {turn_index}:\n[{role}] {turn_text}"
+        if recent_context else f"Turn {turn_index}:\n[{role}] {turn_text}"
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -291,7 +309,8 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
 
     parsed = parse_extraction(raw)
 
-    patches: List[SemanticPatch] = []
+    # pass 1: validate + fingerprint-dedup into `accepted`
+    accepted: List[Dict[str, Any]] = []
     seen_fingerprints: set = set()
     for item in parsed:
         if not isinstance(item, dict):
@@ -302,29 +321,39 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
         payload = str(item.get('payload') or item.get('text') or '')
         if not payload.strip():
             continue
-        patch_id = f"p{turn_index}_{len(patches)}"
+        probe = SemanticPatch(patch_id="probe", turn_index=turn_index,
+                              patch_type=p_type, payload=payload, dependencies=[])
+        if probe.fingerprint in seen_fingerprints:
+            continue
+        seen_fingerprints.add(probe.fingerprint)
+        accepted.append(item)
 
-        # v0.1.10: same behavior as before, readable form — accepts a
-        # list of dependency ids or a single string; anything else is [].
+    # pass 2a: LLM-id -> regenerated-id map (complete before remapping)
+    id_map: Dict[str, str] = {}
+    for k, item in enumerate(accepted):
+        llm_id = str(item.get('patch_id') or '').strip()
+        if llm_id:
+            id_map[llm_id] = f"p{turn_index}_{k}"
+
+    # pass 2b: construct with remapped deps
+    patches: List[SemanticPatch] = []
+    for k, item in enumerate(accepted):
+        p_type = str(item.get('patch_type') or item.get('type') or '').lower().strip()
+        payload = str(item.get('payload') or item.get('text') or '')
         raw_deps = item.get('dependencies')
         if isinstance(raw_deps, list):
-            deps = [str(x) for x in raw_deps]
+            deps = [id_map.get(str(x), str(x)) for x in raw_deps]
         elif isinstance(raw_deps, str):
-            deps = [raw_deps]
+            deps = [id_map.get(raw_deps, raw_deps)]
         else:
             deps = []
 
-        patch = SemanticPatch(
-            patch_id=patch_id,
+        patches.append(SemanticPatch(
+            patch_id=f"p{turn_index}_{k}",
             turn_index=turn_index,
             patch_type=p_type,
             payload=payload,
             dependencies=deps,
-        )
-
-        if patch.fingerprint in seen_fingerprints:
-            continue
-        seen_fingerprints.add(patch.fingerprint)
-        patches.append(patch)
+        ))
 
     return patches

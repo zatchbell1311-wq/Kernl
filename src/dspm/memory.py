@@ -41,6 +41,16 @@ bound never merges with a different or missing bound. Conservative by
 design — an unsolved duplicate is a budget cost; a merged contradiction
 is a wrong answer. Also passes stable_order through to the engine for
 prefix-cache-friendly output (see experiments/bench_kv_cache.py).
+
+v0.1.16 (review fold): the four reviewer findings are part of this
+unpublished release, not a separate 0.1.17: (1) stats.context_built —
+CRR is only measured after the first get_context(); before that,
+critical_selected falls back to critical_total; (2) add_turn threads
+the speaker role into the extraction prompt (it was accepted and then
+dropped); (3) the (was X) chain keeps the three most recently replaced
+values (the old [:2] cap silently deleted the third-oldest value when
+one revision superseded three stale criticals); (4) stats.selected
+reports delivered patches post-build, store size pre-build.
 """
 
 from __future__ import annotations
@@ -78,10 +88,17 @@ _REVISION_MARKERS = {
 # v0.1.15: time/size unit words for the restatement collapse safety
 # check — "5 years" and "5 years" are the same fact; "100 per minute"
 # and "100 per hour" are not, even though the number matches.
-_TIME_SIZE_UNITS = {
-    "ms", "millisecond", "second", "sec", "minute", "min",
-    "hour", "hr", "day", "week", "month", "year",
-    "kb", "mb", "gb", "tb", "%",
+_UNIT_ALIASES = {
+    "ms": "ms", "millisecond": "ms", "milliseconds": "ms",
+    "s": "second", "sec": "second", "secs": "second",
+    "second": "second", "seconds": "second",
+    "min": "minute", "mins": "minute", "minute": "minute", "minutes": "minute",
+    "hr": "hour", "hrs": "hour", "hour": "hour", "hours": "hour",
+    "d": "day", "day": "day", "days": "day",
+    "w": "week", "week": "week", "weeks": "week",
+    "mo": "month", "month": "month", "months": "month",
+    "y": "year", "yr": "year", "year": "year", "years": "year",
+    "kb": "kb", "mb": "mb", "gb": "gb", "tb": "tb", "%": "%",
 }
 
 # v0.1.16: bound/polarity vocabulary for restatement compatibility.
@@ -89,16 +106,19 @@ _TIME_SIZE_UNITS = {
 # when the bound direction differs: "must not exceed 5 years" (upper)
 # and "at least 5 years" (lower) share every token the v0.1.15 rules
 # compared, so (b2) collapsed them — silently deleting a bound.
+# v0.1.17 (finding S1): "sub" added -- hyphenated compounds like
+# "sub-2-second" are upper bounds now that _bound_class splits
+# hyphens like spaces (live smoke evidence).
 _BOUND_UP = {
     "less", "fewer", "under", "below", "within", "most", "max",
-    "maximum", "cap", "capped", "up",
+    "maximum", "cap", "capped", "up", "sub",
 }
 _BOUND_DOWN = {
     "more", "over", "above", "least", "min", "minimum", "floor",
 }
 _BOUND_EXACT = {"exactly", "precisely", "equal"}
 _POLARITY_NEG = {
-    "not", "no", "never", "without", "cannot", "mustn't",
+    "not", "no", "never", "without", "cannot", "can't", "mustn't",
     "don't", "doesn't", "won't", "cant", "mustnt",
 }
 
@@ -146,10 +166,14 @@ def _units_in(text: str) -> frozenset:
     restatement collapse — '5 years' and '5 years' are the same fact;
     '100 per minute' and '100 per hour' are not."""
     units = set()
-    for w in text.lower().split():
-        clean = w.strip(".,;)")
-        if clean.rstrip("s") in _TIME_SIZE_UNITS:
-            units.add(clean.rstrip("s"))
+    # v0.1.17 (finding S1): hyphens split like spaces --
+    # "sub-2-second" carries the unit "second"; without this,
+    # hyphenated values looked unitless and restatement collapse
+    # compared them against nothing.
+    for w in text.lower().replace("-", " ").split():
+        canon = _UNIT_ALIASES.get(w.strip(".,;)"))
+        if canon:
+            units.add(canon)
     return frozenset(units)
 
 
@@ -162,7 +186,9 @@ def _bound_class(text: str) -> str:
     """Return 'upper' (at most / not exceed), 'lower' (at least /
     exceed), 'exact', 'neg' (bare negation, no bound), 'plain', or
     'mixed' (contradictory markers)."""
-    ws = [w.lower().strip(".,;()") for w in text.split()]
+    # v0.1.17 (finding S1): hyphens split like spaces so
+    # "sub-2-second" reads as bound word + value + unit.
+    ws = [w.lower().strip(".,;()") for w in text.replace("-", " ").split()]
     up = down = exact = neg = False
     i = 0
     while i < len(ws):
@@ -297,7 +323,10 @@ class DSPMMemory:
             raise ValueError("llm_client is required to call add_turn()")
 
         dense = self.dense or numeric_density(text) >= DENSE_AUTO_THRESHOLD
+        # v0.1.16 (review point 2): role threaded through -- it was accepted
+        # here and then dropped on the floor.
         patches = extract_turn(self.llm_client, self.model, text, self.turns,
+                               role=role,
                                recent_context=self._last_context,
                                dense=dense)
         for p in patches:
@@ -336,6 +365,11 @@ class DSPMMemory:
     #        classes (v0.1.16)
     #   (c)  cross-type + >=4 shared words, OR >=3 + revision verb
     #   (c2) cross-type + same anchor + revision verb + changed numbers
+    #   (b3) cross-type CON<->DEC same-value restatement: same anchor,
+    #        >=2 shared non-numeric words, identical numbers + units,
+    #        compatible bounds, at least one directional/exact bound
+    #        (v0.1.17 finding S1 -- live smoke showed user [CON] +
+    #        assistant [DEC] echoes coexisting as duplicate criticals)
     #
     # v0.1.15: rule (b2) collapses same-type restatements (user states,
     # assistant confirms — "audit retention 5 years" vs "audit logs stored
@@ -413,6 +447,33 @@ class DSPMMemory:
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (c2) terse cross-type
                         continue
+                    # v0.1.17 (finding S1): (b3) cross-type same-value
+                    # restatement. Live smoke evidence: the user states a
+                    # requirement that extracts as [CON] ('dashboard must
+                    # load in under 2 seconds') and the assistant echo
+                    # extracts as [DEC] ('Dashboard latency must be
+                    # sub-2-second') -- no rule compared across types
+                    # without a revision verb, so both coexisted and the
+                    # store bloated to 8-10 criticals (CRR 70-87% at the
+                    # 59-token smoke budget). Stricter than same-type (b2):
+                    # additionally requires at least one directional or
+                    # exact bound, because cross-type merges are riskier
+                    # ('Budget 100 for cloud' vs 'Budget 100 for training'
+                    # is plain/plain and must stay apart). Known residual,
+                    # frozen by test: thin restatements sharing ONE
+                    # non-numeric word ('Maximum fee ... 0.5%' vs 'fee cap
+                    # ... 0.5%') stay -- collapsing them would also merge
+                    # tier-scoped facts with identical numbers.
+                    bc_new = _bound_class(patch.payload)
+                    bc_old = _bound_class(existing.payload)
+                    if (new_head and new_head == _slot_head(existing.payload)
+                            and len({w for w in shared if not re.search(r"\d", w)}) >= 2
+                            and new_nums and new_nums == _numbers(existing.payload)
+                            and _units_in(patch.payload) == _units_in(existing.payload)
+                            and _polarity_compatible(bc_new, bc_old)
+                            and not (bc_new == "plain" and bc_old == "plain")):
+                        stale.append(existing)          # (b3) cross-type restatement
+                        continue
 
         # bake replaced values into the surviving payload
         if stale and patch.is_critical:
@@ -425,8 +486,17 @@ class DSPMMemory:
                 if val:
                     replaced_vals.append(val)
             if replaced_vals and "(was" not in patch.payload:
-                chain = _dedup_chain(replaced_vals[:2])
+                # v0.1.16 (review point 3): the [:2] cap silently deleted the
+                # third-oldest value when ONE revision superseded three or
+                # more stale criticals (repro: webhook-timeout entries at
+                # 30/20/15 seconds, then "webhook timeout updated to 10
+                # seconds" -- the 15 vanished without a trace). Keep the
+                # three most recently added replaced values; deeper history
+                # is dropped, and the payload cap plus the was-span floors
+                # in the engine bound the result.
+                chain = _dedup_chain(replaced_vals)[-3:]
                 patch.payload = f"{patch.payload} (was {' then '.join(chain)})"
+                patch.recount()   # token_cost must reflect the baked payload
 
         for s in stale:
             self.patches.remove(s)
@@ -466,7 +536,17 @@ class DSPMMemory:
 
     @property
     def stats(self) -> Dict[str, Any]:
-        """Return a summary of memory health, selected-critical retention, and token reduction rate."""
+        """Return a summary of memory health, selected-critical retention, and token reduction rate.
+
+        v0.1.16 (review points 1+4): `context_built` is the delivery flag
+        -- CRR is only MEASURED after the first get_context(); before that
+        it is assumed (critical_selected falls back to critical_total).
+        `selected` is the delivered patch count (store size pre-build), so
+        an empty selection is visible next to trr instead of hiding
+        behind a perfect reduction number. TRR keeps its raw formula:
+        clamping a negative reduction would be metric gaming, and
+        raw_tokens / context_tokens stay exposed for audit.
+        """
         critical_total = len(self.critical_patches)
         if self._context_built:
             critical_selected = len([p for p in self.selected_patches if p.is_critical])
@@ -476,12 +556,20 @@ class DSPMMemory:
         context_tokens = count_tokens(self._last_context) if self._last_context else 0
         crr = 100 if critical_total == 0 else int((critical_selected / critical_total) * 100)
         trr = 100 - int((context_tokens / max(1, raw_tokens)) * 100) if raw_tokens else 0
+        # v0.1.16 (review points 1+4): selected mirrors the
+        # critical_selected fallback -- pre-build it reports the store
+        # size, post-build the delivered size. context_built lets anyone
+        # quoting "100% CRR" show the number was measured on a delivered
+        # context, not assumed.
+        selected_count = len(self.selected_patches) if self._context_built else len(self.patches)
         return {
             "turns": self.turns,
             "total_patches": len(self.patches),
             "critical_total": critical_total,
             "critical_selected": critical_selected,
             "crr": crr,
+            "context_built": self._context_built,
+            "selected": selected_count,
             "budget": self.budget,
             "dense": self.dense,
             "raw_tokens": raw_tokens,
