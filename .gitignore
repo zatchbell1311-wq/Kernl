@@ -22,3 +22,15 @@ skills-lock.json
 /bench_kv_cache_results.json
 experiments/bench_kv_cache_results.json
 _fix_e_round.py
+
+*.f2bak
+*.f3bak
+*.f4bak
+*.f5bak
+*.f6bak
+*.f7bak
+smoke_*.txt
+dist/
+bench_kv_cache_results.json
+
+*.f?abak

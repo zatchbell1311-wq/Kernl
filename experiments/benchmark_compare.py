@@ -256,11 +256,63 @@ def llm_judge(client, model, context, ground_truth):
     return sum(1 for v in found if v is True) / len(ground_truth)
 
 
+class UsageRecordingClient:
+    """v0.1.17 (review point 5): pass-through proxy recording per-call
+    latency and token usage, so live mode can REPORT extractor cost next
+    to accuracy instead of asserting it. Wraps any OpenAI-compatible
+    client; a missing .usage attribute counts as zero."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.latencies = []
+        owner = self
+
+        class Completions:
+            @staticmethod
+            def create(**kwargs):
+                from time import perf_counter
+                t0 = perf_counter()
+                resp = owner._inner.chat.completions.create(**kwargs)
+                owner.latencies.append(perf_counter() - t0)
+                owner.calls += 1
+                usage = getattr(resp, "usage", None)
+                if usage is not None:
+                    owner.input_tokens += getattr(usage, "prompt_tokens", 0) or 0
+                    owner.output_tokens += getattr(usage, "completion_tokens", 0) or 0
+                return resp
+
+        class Chat:
+            completions = Completions()
+
+        self.chat = Chat()
+
+    def __getattr__(self, name):
+        if name == "_inner":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+    def report(self, label):
+        lat = sorted(self.latencies)
+        p50 = lat[len(lat) // 2] if lat else 0.0
+        total = sum(self.latencies)
+        print("%-18s calls %3d   p50 %6.2fs   total %7.1fs   tokens in %7d / out %7d"
+              % (label, self.calls, p50, total,
+                 self.input_tokens, self.output_tokens))
+
+
 def live(args):
     from dspm import DSPMMemory
     if not args.model:
         sys.exit("live mode needs --model (your extractor/judge model name)")
     client = _client(args)
+    # v0.1.17 (review point 5): three probes -- extractor (DSPM overhead),
+    # rolling summary (baseline overhead), judge (shared evaluation overhead).
+    extract_probe = UsageRecordingClient(client)
+    summarize_probe = UsageRecordingClient(client)
+    judge_probe = UsageRecordingClient(client)
     if args.dialogues:
         with open(args.dialogues, encoding="utf-8") as f:
             dialogues = json.load(f)
@@ -268,14 +320,14 @@ def live(args):
         dialogues = [DIALOGUE_1, DIALOGUE_2]
     d_scores, r_scores = [], []
     for d in dialogues:
-        mem = DSPMMemory(budget=args.budget, llm_client=client, model=args.model)
+        mem = DSPMMemory(budget=args.budget, llm_client=extract_probe, model=args.model)
         rolling = ""
         for role, text in d["turns"]:
             mem.add_turn(role, text)
-            rolling = llm_summarize(client, args.model, rolling, role, text)
+            rolling = llm_summarize(summarize_probe, args.model, rolling, role, text)
         ctx = mem.get_context(query="overview")
-        s_d = llm_judge(client, args.model, ctx, d["ground_truth"])
-        s_r = llm_judge(client, args.model, rolling, d["ground_truth"])
+        s_d = llm_judge(judge_probe, args.model, ctx, d["ground_truth"])
+        s_r = llm_judge(judge_probe, args.model, rolling, d["ground_truth"])
         d_scores.append(s_d)
         r_scores.append(s_r)
         print(f"{d.get('name', 'dialogue'):<18} DSPM {s_d * 100:5.1f}%   "
@@ -290,6 +342,12 @@ def live(args):
     print(f"mean               DSPM {fmt(d_scores)}{extra}   "
           f"rolling-summary {fmt(r_scores)}{extra_r}   "
           f"({len(d_scores)} dialogues, budget {args.budget})")
+    # v0.1.17 (review point 5): latency/token accounting for the
+    # efficiency table -- extractor vs rolling-summary overhead,
+    # judge shared by both arms.
+    extract_probe.report("extractor")
+    summarize_probe.report("rolling-summary")
+    judge_probe.report("judge")
 
 
 def main():

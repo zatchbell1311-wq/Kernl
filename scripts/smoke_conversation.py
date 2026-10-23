@@ -61,4 +61,4 @@ ctx_ok = "10" in ctx and "30" in ctx
 print(f"[{'PASS' if ctx_ok else 'FAIL'}] both values survive trimming in ctx (10 and 30)")
 crr_ok = memory.stats["crr"] == 100
 print(f"[{'PASS' if crr_ok else 'FAIL'}] CRR 100%: {memory.stats['crr']}%")
-print("\n(if CRR alone fails: critical-count bloat from restatement duplicates - the known v0.1.14 issue, not the prompt fix)")
+print("\n(if CRR alone fails: critical-count bloat from uncollapsed duplicates -- the v0.1.17 (b3)/(b4) rules track it; if this repeats, run diag_smoke_criticals.py and paste the DIAG block)")

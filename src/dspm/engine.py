@@ -47,6 +47,17 @@ the latent test_recency_prefers_recent_noncritical failure in clean
 environments), and DSPMEngine(stable_order=True) emits patches in
 (turn_index, patch_id) order for prefix-cache friendliness (see
 experiments/bench_kv_cache.py).
+
+v0.1.17 F6 (20-run live gate, run 19): comma-form revision
+history. The live extractor also emits "10 seconds, was 30
+seconds" -- no "(was" marker. Those payloads floored at 2 words,
+"was" scored as filler, and a 2-word allowance delivered "[DEC]
+10 seconds," with the replaced value gone entirely. _word_floor
+recognizes the comma form now, the minimal-story path normalizes
+it to the canonical "10 (was 30)", and a "(was 30 seconds)" span
+with the unit inside the parens compacts to "10 (was 30)" at
+the floor instead of falling through to the valueless ladder
+result.
 """
 
 from __future__ import annotations
@@ -151,6 +162,14 @@ class DSPMEngine:
         "a", "an", "to", "in", "on", "at", "for", "of", "or", "and",
         "than", "must", "should", "will", "shall", "may", "might",
         "can", "could", "our", "any", "all",
+    )
+    # v0.1.17 F6: prose history markers that may directly precede
+    # the replaced value in a comma-form revision ("10 seconds,
+    # was 30 seconds", "... previously 30 seconds"). The floor and
+    # the minimal-story path both use them.
+    _HISTORY_MARKERS = (
+        "was", "were", "previous", "previously", "prior",
+        "earlier", "formerly", "superseded",
     )
 
     def __init__(self, budget: int = DEFAULT_BUDGET, stable_order: bool = False):
@@ -379,7 +398,18 @@ class DSPMEngine:
         revision story — the story form '10 (was 30)' IS the floor, and
         trimming below it destroys the revision history while the
         current value survives (the live webhook-rematch failure)."""
-        return 3 if "(was" in payload else 2
+        # v0.1.17 F6 (20-run live gate, run 19): the live
+        # extractor also emits comma-form history ("10 seconds,
+        # was 30 seconds") -- no "(was" marker, so it floored at
+        # 2, the 2-word allowance delivered "10 seconds," and the
+        # replaced value was gone.
+        if "(was" in payload:
+            return 3
+        if re.search(r"\b(?:was|were|previous(?:ly)?|prior|earlier|"
+                     r"formerly|superseded)\s+\S*\d",
+                     payload, re.IGNORECASE):
+            return 3
+        return 2
 
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
@@ -492,14 +522,42 @@ class DSPMEngine:
         # Only returns when the story fits within max_words — otherwise
         # falls through to the ladder, so callers trimming toward the
         # floor always make strict progress (no live-lock).
-        if max_words <= 3 and any(w.lower().startswith("(was") for w in words):
-            was_start = next(i for i, w in enumerate(words)
-                             if w.lower().startswith("(was"))
-            j = was_start
-            while j < len(words) and not words[j].endswith(")"):
-                j += 1
-            was_end = min(j, len(words) - 1)
-            span = words[was_start:was_end + 1]
+        # v0.1.17 F6 (20-run live gate, run 19): revision history
+        # comes in two shapes -- the baked paren form "(was 30)"
+        # and the comma form a live extractor emits ("10 seconds,
+        # was 30 seconds"). Only the paren form was recognized,
+        # so comma-form payloads missed the minimal-story floor
+        # and the ladder kept the current value while dropping
+        # the replaced one entirely ("[DEC] 10 seconds,").
+        was_start = None
+        paren_form = False
+        for i, w in enumerate(words):
+            if w.lower().startswith("(was"):
+                was_start, paren_form = i, True
+                break
+        if was_start is None:
+            for i, w in enumerate(words):
+                if (w.lower().strip(".,;:") in self._HISTORY_MARKERS
+                        and i + 1 < len(words)
+                        and re.search(r"\d", words[i + 1])):
+                    was_start, paren_form = i, False
+                    break
+        if max_words <= 3 and was_start is not None:
+            if paren_form:
+                j = was_start
+                while j < len(words) and not words[j].endswith(")"):
+                    j += 1
+                was_end = min(j, len(words) - 1)
+                span = words[was_start:was_end + 1]
+            else:
+                # comma form normalizes to the canonical story
+                # tokens: "was 30 seconds" -> "(was 30)"
+                span = ["(was", words[was_start + 1].rstrip(".,;:)") + ")"]
+            if len(span) > 2:
+                # the history unit is droppable: "10 (was 30
+                # seconds)" costs four words, "10 (was 30)"
+                # carries the same revision story in three.
+                span = [span[0], span[1].rstrip(".,;:)") + ")"]
             current = next((words[i] for i in range(was_start)
                             if re.search(r"\d", words[i])), None)
             # v0.1.14: find the key noun BEFORE the current value

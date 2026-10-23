@@ -64,6 +64,42 @@ store and the notebook (reviewer point 2), stats splits conversation
 / patch / context tokens (reviewer point 4), and the (was X) span
 stays the machine-readable revision story the starvation trim
 protects -- prose is droppable, the span is not.
+
+20-run live gate (F6): the loop caught two live-extraction
+shapes the offline suites could not. Mode 1 -- the same
+dashboard latency fact arrived as a word-order reversal
+('Dashboard sub-2-second' [CON] vs 'sub-2-second dashboard'
+[DEC]); its distinctive shared token carries a digit, so the
+(b3) non-numeric word count never reached two and the store
+bloated to 8 against the 7-critical delivery cap (CRR 87% on
+3/20 runs). Rule (b5) bridges order-insensitive echoes under
+every (b3)/(b4) safety. Mode 2 -- comma-form revision history
+lost the replaced value at the 2-word floor; the engine-side
+F6 half fixes the floor and the minimal story.
+
+20-run live gate, round 2 (F7): F6 was green in isolation
+(102 tests, harness 5/5) but the live loop still failed 6/20
+runs, all CRR under-reporting (87/77/87/87/70/87). Both
+signatures are echo criticals whose live word order breaks
+the slot-head anchor every earlier bridge keys on. (i) The
+audit retention fact arrived twice -- noun first ('Audit
+retention set to 5 years', head 'audit') and verb first
+('Retain audit logs for exactly 5 years', head 'retain') --
+and survived as TWO decisions in 6/6 failing runs ('[DEC] 5
+years' + '[DEC] exactly 5'). (ii) Dashboard echoes led
+with confirmation verbs ('Confirmed sub-2-second dashboard'
+-- head 'confirmed', absent from the other payload), so
+(b5)'s bidirectional head containment never fired. Rule
+(b6) bridges same- and cross-type echoes by what the pair
+SHARES instead of where each payload starts: a shared
+subject noun, identical numbers/units, compatible bounds,
+never plain/plain, within two turns -- plus a residue guard
+(every unshared content word must be a confirmation verb, a
+slot-family twin like retain~retention, or property-positioned
+behind the subject with only non-prepositional filler
+between). Scoped pairs -- platinum vs silver fee, dashboard
+vs homepage, cloud vs training budgets, audit vs payment
+logs -- stay separate.
 """
 
 from __future__ import annotations
@@ -275,6 +311,59 @@ def _head_direction(head: str) -> str:
     return "plain"
 
 
+# v0.1.17 F7 (20-run live gate, round 2): confirmation/stasis verbs a
+# live extractor leads echo payloads with. Both round-2 failure
+# signatures are echoes whose FIRST significant token is the verb, not
+# the subject noun -- 'Retain audit logs for exactly 5 years' (head
+# 'retain' vs the original's 'audit') and 'Confirmed sub-2-second
+# dashboard' (head 'confirmed', absent from the other payload) --
+# which is exactly what broke the slot-head anchors of (b2)/(b3)/(b5).
+# In the (b6) residue test these verbs restate, they never scope.
+_ECHO_VERBS = frozenset({
+    "confirmed", "confirm", "confirms", "keep", "keeps", "kept",
+    "lock", "locks", "locked", "target", "targets", "ensure",
+    "ensures", "agree", "agreed", "remain", "remains", "stay",
+    "stays", "hold", "holds", "track", "tracked", "noted",
+    "accepted", "approve", "approved", "enforce", "enforced",
+    "apply", "applies", "applied", "retain", "retains", "retained",
+})
+
+# v0.1.17 F7: morphological slot twins -- 'retention' and 'retain' are
+# the same slot to any reader, never to a string set. Deliberately a
+# closed family list: a wrong merge costs more than a missed merge.
+_SLOT_FAMILIES = (
+    frozenset({"retain", "retention", "retained", "retaining"}),
+)
+
+# v0.1.17 F7: small measurement/filing nouns that ride along with a
+# subject ('dashboard load time', 'audit logs', 'dashboard latency').
+# They never anchor the bridge as the shared subject, but they may
+# sit between the subject and a later residue word -- and 'records'
+# BEFORE the subject ('No more than 500 records per page') still
+# reads as a scope word, because position carries the meaning there.
+_PROPERTY_NOUNS = frozenset({
+    "time", "load", "loads", "latency", "response", "speed",
+    "duration", "period", "logs", "log", "data", "records", "record",
+})
+
+# v0.1.17 F7: a preposition between the shared subject and an unshared
+# noun marks a SCOPE, not a property -- 'budget for cloud' vs
+# 'dashboard latency'. The (b6) property-position tolerance never
+# crosses one of these.
+_BRIDGE_BLOCKERS = frozenset({
+    "for", "to", "of", "in", "on", "at", "by", "with", "from", "per",
+})
+
+
+def _slot_family_eq(a: str, b: str) -> bool:
+    """v0.1.17 F7: True when two words are morphological twins of one
+    slot ('retain' ~ 'retention')."""
+    for fam in _SLOT_FAMILIES:
+        if a in fam and b in fam:
+            return True
+    return False
+
+
 # v0.1.12: the numeric value inside a single word, for comparing values
 # across payloads ("30)" -> "30", "0.5%," -> "0.5").
 def _first_number(word: str) -> Optional[str]:
@@ -427,6 +516,23 @@ class DSPMMemory:
     #        apart (v0.1.17 finding S2 -- the frozen fee pair held
     #        the store at 6 against the 7-critical delivery cap;
     #        6/20 live runs tipped to 8 and CRR fell to 87%)
+    #   (b5) cross-type word-order echo: BOTH slot heads present
+    #        in the other payload's word set + a shared
+    #        digit-bearing token as the value anchor;
+    #        numbers/units/bounds/proximity safety as (b3)/(b4)
+    #        (v0.1.17 20-run gate mode 1 -- 'Dashboard
+    #        sub-2-second' [CON] + 'sub-2-second dashboard' [DEC]
+    #        bloated the store to 8; CRR 87% on 3/20 runs)
+    #   (b6) shared-subject same-value echo (same- OR cross-type,
+    #        v0.1.17 F7): value safety as (b3)/(b5) + a shared
+    #        subject noun >=4 chars, never plain/plain, <=2 turns,
+    #        and NO conflicting scope noun in the residue --
+    #        unshared content words must be echo verbs, slot-family
+    #        twins (retain~retention), or property-positioned
+    #        behind the subject (round 2: 6/20 runs failed CRR
+    #        87-70% on 'Audit retention set to 5 years' + 'Retain
+    #        audit logs for exactly 5 years' and on
+    #        confirmation-verb dashboard echoes)
     #
     # v0.1.15: rule (b2) collapses same-type restatements (user states,
     # assistant confirms — "audit retention 5 years" vs "audit logs stored
@@ -493,6 +599,19 @@ class DSPMMemory:
                             and _polarity_compatible(_bound_class(patch.payload),
                                                      _bound_class(existing.payload))):
                         stale.append(existing)          # (b2) restatement collapse
+                        continue
+                    # v0.1.17 F7 (20-run live gate, round 2): (b6)
+                    # shared-subject echo bridge, same-type site.
+                    # Round 2 failed 6/20 runs on echo pairs whose
+                    # live word order breaks every head anchor:
+                    # 'Audit retention set to 5 years' + 'Retain
+                    # audit logs for exactly 5 years' (heads 'audit'
+                    # vs 'retain') survived as TWO decisions in 6/6
+                    # failing runs. (b6) anchors on the shared
+                    # subject noun + value safety + residue guard
+                    # instead -- see _echo_bridge.
+                    if self._echo_bridge(patch, existing):
+                        stale.append(existing)          # (b6) shared-subject echo bridge
                         continue
                 else:
                     # (c) cross-type revision — >=4 words, or >=3 with marker
@@ -565,6 +684,49 @@ class DSPMMemory:
                                      and new_head in shared_nonnum))):
                         stale.append(existing)          # (b4) thin echo bridge
                         continue
+                    # v0.1.17 20-run live gate (mode 1 -- runs
+                    # 9/11/20 at CRR 87%): (b5) compound-token
+                    # bridge. The same dashboard latency fact
+                    # arrived as 'Dashboard sub-2-second' [CON]
+                    # and 'sub-2-second dashboard' [DEC] -- a
+                    # word-order reversal. Its distinctive shared
+                    # token ('sub-2-second') carries a digit, so
+                    # the >=2 shared NON-numeric guard in (b3)
+                    # counted only 'dashboard' and the pair never
+                    # collapsed; the store bloated to 8 against
+                    # the 7-critical delivery cap. (b5) bridges
+                    # order-insensitive echoes: BOTH slot heads
+                    # present in the other payload's word set (a
+                    # scope noun on one side only, as in the tier
+                    # guards, never bridges), a shared
+                    # digit-bearing token as the value anchor,
+                    # plus every (b3)/(b4) safety: identical
+                    # numbers, identical units, compatible bounds,
+                    # never plain/plain, <=2 turns.
+                    old_words = set(re.findall(r"\w+", existing.payload.lower()))
+                    new_words = set(re.findall(r"\w+", patch.payload.lower()))
+                    if (len(old_words & new_words) >= 2
+                            and any(re.search(r"\d", w) for w in old_words & new_words)
+                            and new_nums == _numbers(existing.payload)
+                            and old_head and old_head in new_words
+                            and new_head and new_head in old_words
+                            and _units_in(patch.payload) == _units_in(existing.payload)
+                            and _polarity_compatible(bc_new, bc_old)
+                            and not (bc_new == "plain" and bc_old == "plain")
+                            and abs(patch.turn_index - existing.turn_index) <= 2):
+                        stale.append(existing)          # (b5) compound-token bridge
+                        continue
+                    # v0.1.17 F7: (b6) shared-subject echo bridge,
+                    # cross-type site -- the confirmation-verb echo
+                    # shapes that slip (b5)'s bidirectional head
+                    # containment ('Keep Dashboard latency
+                    # sub-2-second' + 'Confirmed sub-2-second
+                    # dashboard': neither 'keep' nor 'confirmed'
+                    # appears in the other payload, while every
+                    # other (b5) condition passes).
+                    if self._echo_bridge(patch, existing):
+                        stale.append(existing)          # (b6) shared-subject echo bridge
+                        continue
 
         # bake replaced values into the surviving payload
         if stale and patch.is_critical:
@@ -592,6 +754,95 @@ class DSPMMemory:
         for s in stale:
             self.patches.remove(s)
         self.patches.append(patch)
+
+    def _echo_bridge(self, patch: SemanticPatch,
+                     existing: SemanticPatch) -> bool:
+        """v0.1.17 F7 (20-run live gate, round 2): (b6) shared-subject
+        same-value echo bridge -- same- OR cross-type.
+
+        F6 was green in isolation (102 tests, harness 5/5) yet the
+        live loop still failed 6/20 runs, all CRR under-reporting,
+        with two signatures -- echo criticals whose live word order
+        breaks the slot-head anchor every earlier bridge keys on:
+
+          'Audit retention set to 5 years' + 'Retain audit logs for
+          exactly 5 years'  (heads 'audit' vs 'retain': (b2) requires
+          head equality, (b) needs >=4 shared words -- the pair
+          survived as TWO decisions in 6/6 failing runs, delivered as
+          '[DEC] 5 years' + '[DEC] exactly 5')
+
+          'Dashboard latency must be sub-2-second' + 'Confirmed
+          sub-2-second dashboard'  (the echo leads with the
+          confirmation verb, so (b5)'s bidirectional head containment
+          fails; with a verb-first constraint BOTH directions fail)
+
+        (b6) anchors on what the pair SHARES instead of where each
+        payload starts. All required: identical non-empty numbers,
+        identical units, compatible bounds, never plain/plain, <=2
+        turns, and a shared SUBJECT NOUN (>=4 chars, purely alpha,
+        not stopword/revision marker/bound word/unit/echo verb/
+        property noun). The residue guard then keeps scoped facts
+        apart: every unshared content word must be a confirmation
+        verb (_ECHO_VERBS), a morphological twin of the other side
+        ('retention' ~ 'retain'), or sit in property position after
+        the shared subject with only non-blocker stopwords, echo
+        verbs, property nouns, digits or <=3-char non-bound tokens
+        between. 'platinum/silver fee', 'dashboard vs homepage',
+        'cloud vs training budgets', 'audit vs payment logs' and the
+        no-more-than/page-size pair all stay separate.
+        """
+        if abs(patch.turn_index - existing.turn_index) > 2:
+            return False
+        new_nums = _numbers(patch.payload)
+        if not new_nums or new_nums != _numbers(existing.payload):
+            return False
+        if _units_in(patch.payload) != _units_in(existing.payload):
+            return False
+        bc_new = _bound_class(patch.payload)
+        bc_old = _bound_class(existing.payload)
+        if not _polarity_compatible(bc_new, bc_old):
+            return False
+        if bc_new == "plain" and bc_old == "plain":
+            return False
+        a_words = re.findall(r"\w+", patch.payload.lower())
+        b_words = re.findall(r"\w+", existing.payload.lower())
+        a_set, b_set = set(a_words), set(b_words)
+        shared = a_set & b_set
+        subjects = {w for w in shared
+                    if len(w) >= 4 and w.isalpha()
+                    and w not in _STOPWORDS and w not in _REVISION_MARKERS
+                    and w not in _BOUND_UP and w not in _BOUND_DOWN
+                    and w not in _BOUND_EXACT and w not in _POLARITY_NEG
+                    and w not in _UNIT_ALIASES and w not in _ECHO_VERBS
+                    and w not in _PROPERTY_NOUNS}
+        if not subjects:
+            return False
+        for words, other in ((a_words, b_set), (b_words, a_set)):
+            subj_pos = [i for i, w in enumerate(words) if w in subjects]
+            for i, w in enumerate(words):
+                if (len(w) < 4 or not w.isalpha() or w in shared
+                        or w in _STOPWORDS or w in _REVISION_MARKERS
+                        or w in _ECHO_VERBS or w in _BOUND_UP
+                        or w in _BOUND_DOWN or w in _BOUND_EXACT
+                        or w in _POLARITY_NEG or w in _UNIT_ALIASES):
+                    continue
+                if any(_slot_family_eq(w, o) for o in other):
+                    continue
+                ok = False
+                for sp in subj_pos:
+                    if i > sp and all(
+                            (t in _STOPWORDS and t not in _BRIDGE_BLOCKERS)
+                            or t in _ECHO_VERBS or t in _PROPERTY_NOUNS
+                            or any(c.isdigit() for c in t)
+                            or (len(t) <= 3 and t not in _BOUND_UP
+                                and t not in _BOUND_DOWN
+                                and t not in _BOUND_EXACT)
+                            for t in words[sp + 1:i]):
+                        ok = True
+                        break
+                if not ok:
+                    return False
+        return True
 
     def _jaccard(self, left: str, right: str) -> float:
         """Return the Jaccard overlap between canonicalized word sets."""
