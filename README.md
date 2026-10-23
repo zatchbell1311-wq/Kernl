@@ -1,14 +1,13 @@
 # DSPM — Dynamic Semantic Patch Memory
+*by Dhruv Dubey*
 
-**by Kernl.ai**
+Compress multi-turn LLM conversations while every constraint, decision and revision survives.
 
-> Compress multi-turn LLM conversations while every constraint, decision and revision survives.
->
-> Up to ~83% token reduction at a 250-token budget, with 100% critical retention across our benchmark suite. Under very small budgets, criticals are trimmed to their word floor and dropped only as a documented last resort.
+Up to ~83% token reduction at a 250-token budget, with 100% critical retention across our benchmark suite. Under very small budgets, criticals are trimmed to their word floor and dropped only as a documented last resort.
 
-[![PyPI version](https://img.shields.io/bypi/v/dspm-memory?label=pypi&cacheSeconds=0)](https://pypi.org/project/dspm-memory/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://badge.fury.io/py/dspm-memory.svg)](https://pypi.org/project/dspm-memory/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 
 **Who it's for:** agents and chatbots whose long conversations must not lose a constraint, a decision, or a revised value (support bots, coding agents, assistants that remember a user's hard rules across sessions).
 
@@ -42,17 +41,18 @@ print(memory.stats)
 ```
 
 **Output:**
+
 ```
 [DEC] Track the 0.5% fee cap.
 [CON] PCI-DSS requires tokenized card storage and ASV
 [DEC] webhook timeout updated to 10 seconds
 [CON] PCI-DSS compliant, max fee 0.5%, deadline Friday
-{'turns': 6, 'total_patches': 4, 'critical_total': 4, 'critical_selected': 4, 'crr': 100, 'budget': 60, 'raw_tokens': 61, 'context_tokens': 56, 'trr': 9}
+{'turns': 6, 'total_patches': 4, 'critical_total': 4, 'critical_selected': 4, 'crr': 100, 'budget': 60, 'raw_tokens': 61, 'context_tokens': 56, 'trr': 9, ...}
 ```
 
 Only the 10-second entry remains; the 30-second setting is superseded. The fee cap and deadline survived, and `crr: 100` throughout. At even tinier budgets the revision story is kept in minimal form, e.g. `10 (was 30)`.
 
-**Try to break it:** give it a conversation where a value changes several times under a very small budget, and open an issue if a constraint or revision is lost.
+> **Try to break it:** give it a conversation where a value changes several times under a very small budget, and [open an issue](https://github.com/zatchbell1311-wq/dspm) if a constraint or revision is lost.
 
 ---
 
@@ -64,19 +64,19 @@ Long conversations eat your context window. Naive truncation drops the constrain
 
 ## How It Works
 
-DSPM converts each conversation turn into typed semantic patches — `constraint`, `decision`, `code`, `equation`, `entity`, `structure` — and compresses them under a fixed token budget. Critical patches (constraints and decisions) are structurally protected: they survive compression even when everything else is trimmed.
+DSPM converts each conversation turn into typed semantic patches — constraint, decision, code, equation, entity, structure — and compresses them under a fixed token budget. Critical patches (constraints and decisions) are structurally protected: they survive compression even when everything else is trimmed.
 
 ```
 Raw conversation (452 tokens, 18 turns)
         ↓
 Semantic extraction → 28 patches, 18 critical
         ↓
-7-stage compression pipeline
+6-stage compression pipeline
         ↓
 Compressed context (249 tokens) — 100% of criticals intact
 ```
 
-**The 7-stage pipeline:** dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection → adaptive budgeting.
+The 6-stage pipeline: dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection. (A 7th stage, adaptive per-type budgeting, is designed but not wired in this release.)
 
 ---
 
@@ -149,14 +149,13 @@ Save files are portable JSON, written atomically (a crash mid-save can't corrupt
 
 - Never dropped by deduplication, fusion, or pruning
 - Under budget pressure, payloads are trimmed numbers-first — and units bind to their numbers (`30 seconds` stays `30 seconds`, never just `30`)
-- **Polarity words survive trimming** (v0.1.16): negations (`not`, `never`, `without`) bind to the word they negate, and comparators (`less than`, `under`, `no more than`, `at least`, `at most`, `must not exceed`) bind to their numbers as atomic spans — "dashboard must load in under 2 seconds" never degrades to "dashboard 2 seconds", and "must not exceed 5 years" is never trimmed or collapsed into "at least 5 years" while CRR stays 100
-- When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old — including cross-type revisions (a constraint revised by a decision), terse patches, and full revision chains (60s → 300s → 120s keeps the whole lineage). Even when a starvation budget forces criticals to their word floor, the revision story survives in minimal form: `10 (was 30)`
+- Polarity words survive trimming (v0.1.17): negations (`not`, `never`, `without`) bind to the word they negate, and comparators (`less than`, `under`, `no more than`, `at least`, `at most`, `must not exceed`) bind to their numbers as atomic spans — `dashboard must load in under 2 seconds` never degrades to `dashboard 2 seconds`, and `must not exceed 5 years` is never trimmed or collapsed into `at least 5 years` while CRR stays 100
+- When a constraint is revised mid-conversation (e.g. TTL 60s → 300s), the new value supersedes the old — including cross-type revisions, terse patches, and full revision chains (60s → 300s → 120s keeps the whole lineage). Even when a starvation budget forces criticals to their word floor, the revision story survives in minimal form: `10 (was 30)`
 - A critical is only dropped as a last resort: every critical already at its word floor and budget still cannot hold them
-- Transient API failures (rate limits, 5xx) **and empty responses from reasoning models** are retried automatically with backoff — three attempts before the error surfaces; gpt-oss models run extraction at low reasoning effort by default
+- Transient API failures (rate limits, 5xx) and empty responses from reasoning models are retried automatically with backoff — three attempts before the error surfaces; gpt-oss models run extraction at low reasoning effort by default
+- Ablation result: removing the shadow-selection mechanism collapses CRR from 100% to 37.9%, isolating the guarantee to a single identifiable component
 
-> **Ablation result:** Removing the shadow-selection mechanism collapses CRR from 100% to 37.9%, isolating the guarantee to a single identifiable component.
-
-The guarantee covers what the extraction model captures as a constraint or decision. If the extractor misses or misclassifies something, DSPM cannot protect it (see Known Limitations).
+> The guarantee covers what the extraction model captures as a constraint or decision. If the extractor misses or misclassifies something, DSPM cannot protect it (see [Known Limitations](#known-limitations)).
 
 ---
 
@@ -170,33 +169,31 @@ Tested across 7 domains × 40 turns each:
 | 250 | 249 | 82.8% | 100% |
 | 400 | 395 | 72.4% | 100% |
 
-`CRR` = Critical Retention Rate. `TRR` = Token Reduction Ratio.
+CRR = Critical Retention Rate. TRR = Token Reduction Ratio.
 
-**Provenance:** measured on 7 hand-authored 40-turn technical dialogues (API design, ML ops, IoT, security IR, supply chain, clinical workflow, project management); extraction and judging by GLM via OpenRouter (the since-renamed "ox-alpha" model). The same model family performed both extraction and judging, and the benchmark has not been independently replicated. Numbers vary by extraction model and domain — check your own with `memory.stats`.
+> **Provenance:** measured on 7 hand-authored 40-turn technical dialogues (API design, ML ops, IoT, security IR, supply chain, clinical workflow, project management); extraction and judging by GLM via OpenRouter. The same model family performed both extraction and judging, and the benchmark has not been independently replicated. Numbers vary by extraction model and domain — check your own with `memory.stats`.
 
 ---
 
-## Comparison & Performance Harnesses (v0.1.16)
+## Comparison & Performance Harnesses (v0.1.17)
 
-**`experiments/benchmark_compare.py`** measures DSPM against a same-budget rolling summary on fixed scenarios with shared gold checks. The offline mock (`--mode mock`) prints ground-truth retention per scenario; `--mode live` runs a real extractor, a true rolling summary, and an LLM judge over a dialogues file you supply (`--dialogues`), reporting mean ± std across dialogues.
+`experiments/benchmark_compare.py` measures DSPM against a same-budget rolling summary on fixed scenarios with shared gold checks. The offline mock (`--mode mock`) prints ground-truth retention per scenario; `--mode live` runs a real extractor, a true rolling summary, and an LLM judge over a dialogues file you supply (`--dialogues`), reporting mean ± std across dialogues.
 
 ```bash
-python experiments/benchmark_compare.py --mode mock      # offline deterministic pipeline check
+python experiments/benchmark_compare.py --mode mock
 python experiments/benchmark_compare.py --mode live --base-url https://api.groq.com/openai/v1 \
-    --model openai/gpt-oss-20b --dialogues dialogues.json   # reads DSPM_API_KEY or OPENAI_API_KEY or ZAI_API_KEY from the environment
+    --model openai/gpt-oss-20b --dialogues dialogues.json
 ```
 
-Mock-mode reference run (canned extractor, string-match judge — validates the harness, not extraction quality): DSPM 100% mean retention vs rolling-window 70% at budget 250 (api-client-config 100% vs 80%; deployment-rules 100% vs 60%). Pipeline-check numbers, not extraction quality — for that, run `--mode live`.
+Mock-mode reference: DSPM 100% mean retention vs rolling-window 70% at budget 250. Pipeline-check numbers, not extraction quality — run `--mode live` for that.
 
-**`experiments/bench_kv_cache.py`** answers "does a stable patch context keep more of the prompt prefix byte-stable — and therefore provider-cacheable — than a same-budget raw last-K window?" with a deterministic per-turn simulation: per-turn stable-prefix ratios, the mean cacheable-prefix rate, and a patch-slot/jitter sensitivity sweep (`--sweep`). `experiments/bench_kv_live.py` measures cached-token reuse on a real endpoint, including cold / warm / mid-edit TTFT. See `experiments/README.md`.
+`experiments/bench_kv_cache.py` answers whether a stable patch context keeps more of the prompt prefix byte-stable than a same-budget raw last-K window (reference: 85.5% vs 70.7% over 40 turns at budget 250). `experiments/bench_kv_live.py` measures cached-token reuse on a real endpoint. Neither harness yet accounts for extraction latency. See `experiments/README.md`.
 
 ```bash
-python experiments/bench_kv_cache.py            # simulation (writes results JSON to the working directory)
-python experiments/bench_kv_cache.py --sweep     # sensitivity across patch-slot sizes and jitter
-python experiments/bench_kv_live.py   # LIVE cached-token measurement (reads DSPM_API_KEY or OPENAI_API_KEY or ZAI_API_KEY)
+python experiments/bench_kv_cache.py
+python experiments/bench_kv_cache.py --sweep
+python experiments/bench_kv_live.py
 ```
-
-Reference simulation (40 turns, budget 250, seed 20261019): the stable-ordered patch context emitted by `DSPMMemory(stable_order=True)` covers on average **85.5%** of the prompt with a byte-stable (provider-cacheable) prefix vs **70.7%** for a same-budget raw last-K window that slides every turn (+14.8 points); occasional mid-list patch rewrites temporarily invalidate part of the prefix (the turn-29 dip in the printed table). Sensitivity sweep (patch-slot 15–35, jitter 10–40): DSPM 83.2–87.7%, baseline 69.9–71.2%. Simulation, not a live measurement — see `experiments/bench_kv_live.py`; committed output: `experiments/results/bench_kv_cache_results.json`.
 
 ---
 
@@ -204,38 +201,28 @@ Reference simulation (40 turns, budget 250, seed 20261019): the stable-ordered p
 
 ```
 .
-├── src/dspm/                # the package
-│   ├── config.py            #   budgets, ladder priorities, taxonomy
-│   ├── patch.py             #   SemanticPatch + cl100k token counting
-│   ├── extractor.py         #   dual prompts, auto-dense, retry ladder
-│   ├── memory.py            #   DSPMMemory + override rules a/a2/b/b2/c/c2
-│   ├── engine.py            #   T1–T7 pipeline, shadow selection, trimming
-│   └── persistence.py       #   atomic save / merge load
-├── tests/                   # 63 offline tests (pytest)
-├── scripts/                 # live smoke gates & utilities (need GROQ_API_KEY)
-│   ├── chat.py              #   interactive REPL chat with persistent memory
-│   ├── smoke_test.py        #   basic live gate
-│   ├── smoke_dense.py       #   document/dense-mode gate (v0.1.10+)
-│   ├── smoke_conversation.py#   conversation-mode gate (v0.1.13+)
-│   ├── hard_test.py         #   18-turn adversarial budget frontier
-│   ├── real_test.py         #   8-turn fintech compression test
-│   ├── list_models.py       #   list available Groq models
-│   └── generate_audio.py    #   launch-video audio asset synthesis (numpy)
-├── experiments/             # v0.1.16 harnesses (deterministic + one live tool)
-│   ├── probe_polarity.py        #   post-fix polarity probe (budget sweep)
-│   ├── polarity_after.txt       #   saved probe output (evidence)
-│   ├── repro_polarity_bug.py    #   frozen-model repro of the v0.1.15 bug (6/6)
-│   ├── benchmark_compare.py     #   DSPM vs rolling-summary retention (mock + live)
-│   ├── bench_kv_cache.py        #   KV prefix-cache simulation (deterministic)
-│   ├── bench_kv_live.py         #   LIVE cached-token measurement (needs API key)
-│   └── results/                 #   committed reference outputs (bench_kv_cache_results.json)
+├── src/dspm/
+│   ├── config.py
+│   ├── patch.py
+│   ├── extractor.py
+│   ├── memory.py
+│   ├── engine.py
+│   └── persistence.py
+├── tests/                        # 116 offline tests (pytest)
+├── scripts/                      # live smoke gates (need GROQ_API_KEY)
+│   ├── smoke_conversation.py
+│   ├── diag_smoke_criticals.py
+│   └── ...
+├── experiments/
+│   ├── benchmark_compare.py
+│   ├── bench_kv_cache.py
+│   ├── bench_kv_live.py
+│   └── results/
 ├── examples/
-│   └── basic_usage.py       # fully offline demo (no API key)
-├── conftest.py              # pytest bootstrap (runs tests without installing)
-├── real_test.py             # legacy root-level copy of the live test
-├── memory.json              # example notebook (see Persistence above)
+│   └── basic_usage.py
 ├── pyproject.toml
-├── LICENSE                  # MIT
+├── CHANGELOG.md
+├── LICENSE
 └── README.md
 ```
 
@@ -243,32 +230,28 @@ Reference simulation (40 turns, budget 250, seed 20261019): the stable-ordered p
 
 ## Known Limitations
 
-- **Document QA:** DSPM is designed for conversations, where constraints and revisions matter. In head-to-head document question-answering tests it lost to a query-aware compressor (Compresr). Use it for dialogue memory, not for compressing papers or contracts.
-- **Duplicate restatements:** when the same fact is restated by both user and assistant, duplicate criticals can compete for budget under very small budgets. (v0.1.15 collapses most same-value restatements; v0.1.16 stops collapsing them when their bound directions differ — conservative, so some duplicates may coexist.)
-- **Polarity under starvation:** negations and comparators are protected down to the 2-word floor ("never stored", "under 2"), but at the absolute floor a trigram comparator phrase ("no more than 3") can degrade to its bare value — below ~4-word allowances something must give.
-- **Extraction depends on the LLM:** quality varies by extraction model and domain, and a constraint the extractor misses or labels incorrectly is not protected.
-- **Benchmark scope:** 7 hand-authored dialogues, extraction and judging by the same model family. Treat the numbers as a baseline, not a third-party evaluation.
+- **Document QA:** DSPM is designed for conversations. In head-to-head document QA tests it lost to a query-aware compressor. Use it for dialogue memory, not for compressing papers or contracts.
+- **Duplicate restatements:** when the same fact is restated by both user and assistant, duplicate criticals can compete for budget under very small budgets.
+- **Numberless obligation echoes (v0.1.17 known issue):** when a requirement is restated without any numeral (e.g. "all payments must be PCI-DSS compliant" restated as "PCI-DSS compliance"), no collapse rule can pin the pair — every restatement rule is number-anchored by design. Observed: CRR 87 in 7 of 20 runs of the 8-turn conversation smoke at budget 59. Variants where extraction renames the governing token entirely (e.g. "ASV compliance") are invisible to any token-matching rule. Planned fix (v0.1.18): structured slot identity.
+- **Polarity under starvation:** negations and comparators are protected down to the 2-word floor, but at the absolute floor a trigram comparator phrase can degrade to its bare value.
+- **Extraction depends on the LLM:** quality varies by model and domain; a constraint the extractor misses is not protected.
+- **Benchmark scope:** 7 hand-authored dialogues, same model family for extraction and judging. Treat numbers as a baseline, not a third-party evaluation.
 - **Still early:** version 0.1.x, Beta. APIs may change.
 
 ---
 
 ## Document Mode: Dense Extraction
 
-Fact-heavy content — research papers, specs, benchmark tables — needs a wider extraction funnel than conversation. DSPM detects it automatically: any turn whose numeric density (fraction of digit-bearing words) reaches 0.05 is extracted with the dense prompt — up to 10 patches per turn, with rules that keep each numeric result in its own patch with its unit and label verbatim, extract tables one patch per row, and stop experimental/config parameters from being misclassified as constraints.
-
 ```python
-# automatic — this turn is fact-dense, so it routes through the dense funnel:
+# automatic — fact-dense turns route through the dense funnel:
 memory.add_turn("user", "p95 latency 200ms, fee 0.5%, timeout 30 seconds, budget 250 tokens")
 
-# documents — sentence-aware chunking (never splits mid-sentence or mid-table-row),
-# auto-dense per chunk:
+# documents:
 n_chunks = memory.add_document(open("paper.txt", encoding="utf-8").read())
 
-# or force it when you know the input is always fact-dense:
+# force dense mode:
 memory = DSPMMemory(budget=250, llm_client=llm, model="gpt-4o-mini", dense=True)
 ```
-
-Live check (one results paragraph, `gpt-oss-20b` via Groq): **7/7 benchmark numbers captured** as `[EQ]` patches, zero misclassified constraints. Document mode improves extraction of numeric facts, but see Known Limitations for document QA.
 
 ---
 
@@ -281,14 +264,14 @@ Live check (one results paragraph, `gpt-oss-20b` via Groq): **7/7 benchmark numb
 | `budget` | int | 250 | Maximum tokens in the compressed output |
 | `llm_client` | OpenAI | None | Any OpenAI-compatible client |
 | `model` | str | `"gpt-4o-mini"` | Model used for patch extraction |
-| `dense` | bool | `False` | Force the dense extraction funnel (up to 10 patches per turn) on every turn. Auto-dense also triggers per-turn on fact-heavy text regardless of this flag. |
-| `stable_order` | bool | `False` | Emit patches in (turn, id) order instead of utility-ranked order — keeps the KV prefix cache stable across turns (see `experiments/bench_kv_cache.py`). |
+| `dense` | bool | False | Force dense extraction funnel on every turn |
+| `stable_order` | bool | False | Emit patches in (turn, id) order for KV cache stability |
 
 The budget can be changed at any time:
 
 ```python
-memory.budget = 100        # takes effect on the next get_context() call
-memory.set_budget(100)     # explicit alternative — same effect
+memory.budget = 100
+memory.set_budget(100)   # explicit alternative — same effect
 ```
 
 ### Methods
@@ -296,19 +279,19 @@ memory.set_budget(100)     # explicit alternative — same effect
 | Method | Description |
 |--------|-------------|
 | `add_turn(role, text)` | Add a conversation turn. Returns extracted patches. |
-| `add_document(text, chunk_tokens=400)` | Ingest a document: sentence-aware chunking (never splits mid-sentence or mid-table-row), auto-dense per chunk. Returns the chunk count. |
-| `get_context(query="")` | Returns compressed context string, ready for your prompt. |
-| `set_budget(budget)` | Update the token budget. Takes effect on the next `get_context()` call. |
-| `save(path)` | Persist the memory notebook to JSON (atomic write). |
-| `load(path)` | Load a notebook into memory (merge semantics, supersession on load). |
-| `reset()` | Clear all memory and start fresh. |
+| `add_document(text, chunk_tokens=400)` | Ingest a document with sentence-aware chunking. |
+| `get_context(query="")` | Returns compressed context string. |
+| `set_budget(budget)` | Update the token budget. |
+| `save(path)` | Persist memory to JSON (atomic write). |
+| `load(path)` | Load a notebook (merge semantics). |
+| `reset()` | Clear all memory. |
 
 ### Properties
 
 | Property | Description |
 |----------|-------------|
-| `memory.stats` | Dict with token counts, patch counts, active budget, CRR |
-| `memory.critical_patches` | List of all critical patches currently in memory |
+| `memory.stats` | Dict with token counts, patch counts, CRR |
+| `memory.critical_patches` | List of critical patches in memory |
 | `memory.all_patches` | List of every patch in memory |
 
 ---
@@ -323,44 +306,10 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 ## Feedback
 
-Found a case where a constraint or revision is lost, or a conversation DSPM handles badly? Please [open an issue](https://github.com/zatchbell1311-wq/Kernl/issues) with the conversation and the budget you used.
-
----
-
-## Version History
-
-| Version | Changes |
-|---------|---------|
-| 0.1.16 | **Polarity-preserving trimming + bound-aware restatement collapse** (reviewer finding: "100% CRR means the memory items remain, but important words like 'not' or 'less than' could still be lost" — all six failure modes confirmed by `experiments/repro_polarity_bug.py` on v0.1.15). Comparators now bind to their numbers as atomic spans ("under 2 seconds", "less than 100 ms", "no more than 3 retries") with graceful degradation (comparator+number → number+unit → number); negations bind to the word they negate ("not stored") at priority 80 — above key nouns; the key-noun swap can no longer evict a negation or comparator. Restatement rules (b)/(b2) compare bound/polarity classes: "retention must not exceed 5 years" (upper) and "retention at least 5 years" (lower) previously collapsed into ONE critical, silently deleting a bound — same-direction bounds still collapse, plain≈exact preserved. Also: the T5 recency reference floors at the newest patch turn (a latent bug — callers whose turn counter lagged, e.g. direct `_merge_patch` users, got a flat 1.0 recency for every patch; `test_recency_prefers_recent_noncritical` failed deterministically in clean environments and now passes); optional `stable_order=True` for prefix-cache-friendly output (85.5% vs 70.7% cache hit in the 40-turn simulation); new benchmark harnesses — `experiments/benchmark_compare.py` (DSPM vs rolling-summary retention, mock + live) and `experiments/bench_kv_cache.py` + `bench_kv_live.py` (KV prefix-cache reuse simulation + live check); the (b2) docstring ≥3/≥2 mismatch fixed. 12 regression tests (63 total). |
-| 0.1.15 | **Restatement collapse:** same-type patches that restate the same fact (same slot head + ≥2 shared non-numeric words + identical numbers + identical time/size units) now collapse to one critical — "audit retention 5 years" and "audit logs stored for exactly 5 years" previously coexisted as duplicate [CON] patches, eating budget at starvation levels. Rule (b) gains the same unit check (fixes the latent "rate 100 per minute" vs "rate cap 100 per hour" false-positive from the v0.1.13 audit). The unit extractor checks ALL words, not just those immediately after numbers. 3 regression tests (51 total). |
-| 0.1.14 | **Readable starvation trimming + baking chain dedup** (baseline experiment findings): key nouns boosted from priority 30 to 50 — the constraint's subject noun now outranks number-adjacent words, so "rate 100" survives instead of "100 requests" when the budget forces a choice; a post-fill guarantee ensures a number-bearing payload always keeps its key noun (the difference between a readable constraint and an unreadable fragment); the minimal revision story now includes the subject ("timeout 10 (was 30)" not just "10 (was 30)"); domain key nouns expanded (encryption, deployment, region, database, anonymization, sync, binary, battery, cold-start, etc.); (was X) chains are deduplicated — the baseline showed "(was 20 then 20)" (the same value baked twice). 2 regression tests (48 total). |
-| 0.1.13 | **Value directives are decisions** (live conversation-mode finding): 'set the webhook timeout to 30 seconds' was classified as code — the v0.1.10 config-≠-constraint rule, written for document mode, over-applied to speaker directives, so the replaced value never entered the critical lineage and the revision history had nothing to bake. Both prompts now distinguish value DIRECTIVES ('set X to Y', 'change X to Y' — always decisions) from detached configuration DESCRIPTIONS (a document reporting its own settings — code/structure). New release rule: extraction-layer changes require BOTH live smoke gates (document + conversation) before shipping; adds `scripts/smoke_conversation.py`. 1 regression test (46 total). |
-| 0.1.12 | **Revision stories survive supersession and starvation** (live webhook-rematch findings): the (was X) baking is history-aware — a stale patch that is itself a revision gives up its history when restated (`(was 30)`, not the wrong `(was 10)`) and chains full lineages (`(was 300 then 60)`); payloads carrying `(was X)` have a 3-word floor, and at that floor trimming returns the minimal story `10 (was 30)` — current value plus history — instead of a valueless `10 seconds`. 3 regression tests (45 total). |
-| 0.1.11 | **Extractor hardening for reasoning models** (found in live document testing, 3 comparison rounds): extraction output budget raised 2000 → 4000 tokens and made overridable (`extract_turn(max_tokens=...)`); HTTP-200-but-empty responses — reasoning models burning the budget on chain-of-thought, which silently produced 0-patch chunks — are now retried with backoff; gpt-oss models automatically extract at low reasoning effort, with graceful fallback if the provider (400) or a custom client (TypeError) rejects the parameter. 6 regression tests (42 total). |
-| 0.1.10 | **Auto-dense extraction:** fact-heavy turns (numeric density ≥ 0.05) automatically get the dense extraction funnel (up to 10 patches) — v0.1.9's density detector was never wired, so document runs silently used the 5-patch funnel and lost most numeric facts at extraction (live check: a results paragraph now captures 7/7 benchmark numbers, previously 2–3). Dense prompt hardened: experimental/config parameters are no longer misclassified as constraints; each numeric result gets its own patch; tables extract one patch per row. New `add_document()` — sentence-aware document ingestion. Recency in utility scoring now actually decays (was a constant). Corrupted notebook files return 0 on `load()` instead of raising. Fixed a vacuous budget test. 6 new tests (36 total). |
-| 0.1.9 | Replaced values baked into superseded payloads as `(was X)` spans, atomic during trimming — the full revision story (current value + what it replaced) survives even at tiny budgets. Temporal values (weekdays/months/quarters) directly after key nouns survive trimming at priority 90. Dense-mode extraction for fact-heavy turns (manual `dense=True` flag). 3 new tests (30 total). |
-| 0.1.8 | Retry wording corrected — 0.1.7's wheel shipped the previous wording, caught by post-build wheel verification check immediately after upload. No code changes. |
-| 0.1.7 | README-first release (0.1.6's PyPI page was frozen pre-update — built after README finalization this time). Compound units ("per minute") and key constraint nouns ("timeout", "limit") survive trimming as atomic number-spans. "now"/"moved" recognized as revision verbs, and the extractor preserves revision verbs in payloads (real-model quickstart caught a stale-value contradiction). Claims scoped to benchmarks; retry behavior accurately described. Test scripts moved to `scripts/` with exposed API key revoked and stripped. `semantic` extra documented. Python 3.13 classifier; status → Beta. 3 new tests (27 total). |
-| 0.1.6 | **Cross-type revision supersession fixed:** revisions sharing only 3 content words previously survived as contradictions (found in external review). Units now bind to their numbers during trimming (`30 seconds`, never bare `30`). Automatic retry with backoff on rate limits and transient 5xx errors in `add_turn()`. Homepage added to PyPI metadata. 5 regression tests (24 total). |
-| 0.1.5 | **Budget fix:** changing `memory.budget` was silently ignored — the engine kept an independent budget copy. Now synced on every `get_context()`. New `set_budget()` method. `stats` now measures the actual joined context and reports the active budget. 2 regression tests (19 total). |
-| 0.1.4 | Persistence: `memory.save()` / `memory.load()` — cross-session long-term memory as portable JSON. Atomic writes, merge-on-load, revisions supersede stale values. 8 new tests (17 total). |
-| 0.1.3 | Revision supersession fix: stale same-type criticals now removed when superseded. Robust normalized content-word matching. |
-| 0.1.2 | Fixed critical-patch ID collisions (CRR 36% → 100% in 18-turn live test). Budget enforced on joined context string. |
-| 0.1.1 | Fixed T4 dropping criticals with dependencies. Fixed T3 payload mangling. Fixed extractor schema mismatch. |
-| 0.1.0 | Initial release. |
+Found a case where a constraint or revision is lost? Please [open an issue](https://github.com/zatchbell1311-wq/dspm) with the conversation and the budget you used.
 
 ---
 
 ## License
 
 MIT © 2026 Dhruv Dubey
-
-## CRR reporting contract (v0.1.16)
-
-`stats['crr']` measures how many critical patches survive in the most
-recently built context. Before any `get_context()` call, and whenever the
-budget excludes every critical patch, it reports `0.0` -- a CRR of 100
-therefore requires a context to have actually been assembled under the
-current budget. Regression tests:
-`test_crr_reports_zero_when_budget_excludes_all_criticals`,
-`test_clear_resets_crr_contract`.
