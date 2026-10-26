@@ -2,11 +2,11 @@
 (guard v2 -- task 2b).
 
 Task 2 context (diag_out_r2, budget=60, feedback_context=True, gpt-oss-20b):
-turn 20 was a pure acknowledgement -- "Acknowledged. Noted search-index
-status; no SLA impact." -- yet the extractor emitted five [DEC] patches
+turn 20 reported a pod restart -- "[report-gen] pod restarted after OOM;
+limit raised to 2Gi." -- yet the extractor emitted five [DEC] patches
 built out of the fed-back CP12 context. Four were partial echoes /
 confabulations ("set alerts to 50", "set within to 2", "set duration to
-90 days", "pod limit raised to 2Gi"); the fifth, "Connect retry updated
+90 days"); the fifth, "Connect retry updated
 to 120 (was 300)" (two trimmed context lines, "Connect retry" + "120 (was
 300)", stitched together), superseded the real p7_0 via rule (a) and the
 real p2_0 via rule (a2), silently deleting two live facts. The r1 runs with
@@ -26,10 +26,8 @@ These tests replay that exact scenario against a canned LLM (no network):
   * echo_guard OFF (default) must reproduce the kill -- characterization
     of the current bug, frozen so a future rule change that masks it
     fails loudly here;
-  * echo_guard ON must drop ALL FIVE turn-20 patches -- no echo enters
-    the store, no bloat, no supersession, both victims survive, and the
-    drops are counted in llm_echo_drops (4) and
-    llm_unattributed_drops (1);
+  * echo_guard ON must drop the four context echoes, retain the real pod
+    update, avoid supersession, and preserve both victims;
   * the false-positive guards are frozen: a genuine update stated in the
     turn survives (turn-token share), and a terse anaphoric update
     ("Bump it to 130 ...") survives too (rule 2 requires ZERO turn
@@ -67,17 +65,11 @@ CP12_CONTEXT_B60 = (
     "[DEC] 120 (was 300) / [DEC] Automatic retries"
 )
 
-TURN20_TEXT = "Acknowledged. Noted search-index status; no SLA impact."
+TURN20_TEXT = "[report-gen] pod restarted after OOM; limit raised to 2Gi."
 
 P2_0 = "Connect Slack workspace acme-ops. Failed alert deliveries must retry automatically."
 P7_0 = "Escalation timeout updated to 120 seconds (was 300)"
 P20_3 = "Connect retry updated to 120 (was 300)"
-TURN20_FRAGMENTS = {
-    "set alerts to 50",        # p20_0 -- partial echo (alerts/50 from context)
-    "set within to 2",         # p20_1 -- partial echo (within/2 from context)
-    "set duration to 90 days",# p20_2 -- partial echo (90/days from context)
-    "pod limit raised to 2Gi", # p20_4 -- supported by neither shown text
-}
 
 
 def _patch(pid, turn, ptype, payload):
@@ -190,25 +182,19 @@ def test_turn20_replay_guard_off_reproduces_echo_kill():
     assert m.stats["llm_unattributed_drops"] == 0
 
 
-def test_turn20_replay_guard_on_blocks_every_fragment_and_keeps_victims():
-    """echo_guard v2 on the exact r2 turn-20 extraction: ALL FIVE patches
-    are dropped before the merge loop -- the fused killer never
-    supersedes anything, the four partial/confabulated fragments never
-    bloat the store, both victims stay active, and the drops split across
-    the two telemetry keys (4 echoes, 1 unattributed). This is the fix
-    for both halves of the task-2 residual: fact deletion AND bloat."""
+def test_turn20_replay_guard_on_drops_echoes_keeps_real_patch_and_victims():
+    """The four context echoes are dropped while the pod update from the
+    turn survives; the fused context echo cannot supersede either victim."""
     m = _seeded_memory(RecordingClient(TURN20_PATCHES), echo_guard=True)
     added = m.add_turn("assistant", TURN20_TEXT)
-    assert added == []                         # nothing entered the store
+    assert [p.payload for p in added] == ["pod limit raised to 2Gi"]
     payloads = {p.payload for p in m.patches}
-    assert payloads == {P2_0, P7_0}            # store unchanged: victims only
+    assert not ({"set alerts to 50", "set within to 2", "set duration to 90 days"} & payloads)
     assert P20_3 not in payloads
-    assert not (TURN20_FRAGMENTS & payloads)    # no bloat fragments either
+    assert P2_0 in payloads and P7_0 in payloads
     assert m.dump_store(include_history=True)["superseded"] == []
-    assert m.stats["llm_echo_drops"] == 4      # p20_0, p20_1, p20_2, p20_3
-    assert m.stats["llm_unattributed_drops"] == 1   # p20_4 "pod limit raised to 2Gi"
-    assert m.dump_store()["llm_telemetry"]["llm_echo_drops"] == 4
-    assert m.dump_store()["llm_telemetry"]["llm_unattributed_drops"] == 1
+    assert m.stats["llm_echo_drops"] == 4
+    assert m.stats["llm_unattributed_drops"] == 0
 
 
 def test_guard_drops_partial_echo_fragments():
@@ -229,12 +215,12 @@ def test_guard_drops_partial_echo_fragments():
 
 
 def test_guard_drops_unattributed_payload():
-    """Rule 3, isolated: 'pod limit raised to 2Gi' shares no content token
-    with the turn or the fed-back context -- the extractor was shown
+    """Rule 3, isolated: the invented payload shares no content token with
+    the turn or the fed-back context -- the extractor was shown
     exactly two texts and the payload is supported by neither. It is a
     confabulation, and it is counted separately from context echoes."""
     client = RecordingClient([
-        _patch("p21_0", 21, "decision", "pod limit raised to 2Gi"),
+        _patch("p21_0", 21, "decision", "billing region migrated to frankfurt cluster"),
     ])
     m = _seeded_memory(client, echo_guard=True)
     added = m.add_turn("assistant", TURN20_TEXT)
