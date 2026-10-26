@@ -48,7 +48,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from dspm.patch import SemanticPatch
-from dspm.config import PATCH_TYPES, EXTRACT_MAX_TOKENS
+from dspm.config import (PATCH_TYPES, EXTRACT_MAX_TOKENS, EXTRACT_MIN_TOKENS,
+                         REASONING_PARAM_MODE)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -210,7 +211,10 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
                  recent_context: str = '', dense: bool = False,
                  max_tokens: Optional[int] = None,
                  reasoning_effort: Optional[str] = None,
-                 role: str = 'user') -> List[SemanticPatch]:
+                 role: str = 'user', strict: bool = False,
+                 telemetry: Optional[Dict[str, int]] = None,
+                 reasoning_param_mode: Optional[str] = None,
+                 max_tokens_floor: Optional[int] = None) -> List[SemanticPatch]:
     """Extract semantic patches from a conversation turn using an LLM client.
 
     `dense=True` widens the extraction funnel — more patches allowed,
@@ -253,13 +257,22 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
     # v0.1.11: build the request kwargs. reasoning_effort is only sent
     # when explicitly requested or auto-detected for gpt-oss models —
     # other providers reject unknown kwargs with a non-retryable 400.
+    def _bump(key: str) -> None:
+        if telemetry is not None:
+            telemetry[key] = telemetry.get(key, 0) + 1
+
     if max_tokens is None:
         max_tokens = EXTRACT_MAX_TOKENS
+    floor = EXTRACT_MIN_TOKENS if max_tokens_floor is None else max(0, int(max_tokens_floor))
+    max_tokens = max(int(max_tokens), floor)
     request_kwargs = {"max_tokens": max_tokens}
     if reasoning_effort is None and "gpt-oss" in model.lower():
         reasoning_effort = "low"
-    if reasoning_effort:
+    param_mode = reasoning_param_mode or REASONING_PARAM_MODE
+    if reasoning_effort and param_mode == "top":
         request_kwargs["reasoning_effort"] = reasoning_effort
+    elif reasoning_effort and param_mode == "extra_body":
+        request_kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
 
     # v0.1.11 retry loop. Three failure classes now retry (up to 3
     # attempts, 2s/4s backoff between them):
@@ -280,34 +293,79 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
     response = None
     last_exc = None
     raw = ""
+    finish_reason = None
     for attempt in range(3):
         try:
+            _bump("llm_calls")
             response = llm_client.chat.completions.create(
                 model=model, messages=messages, temperature=0.0,
                 **request_kwargs)
             # v0.1.11: reading the response INSIDE the try also makes odd
             # response shapes (missing .choices/.message) retryable
             # instead of crashing after the loop.
-            raw = (response.choices[0].message.content or "").strip()
+            choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            raw = (choice.message.content or "").strip()
             if raw:
                 break
+            _bump("llm_empty")
+            if attempt < 2:
+                _bump("llm_retries")
         except Exception as e:
             last_exc = e
+            _bump("llm_errors")
             code = getattr(e, 'status_code', None)
             if code in NON_RETRYABLE:
-                if request_kwargs.get("reasoning_effort") and code == 400:
+                if (request_kwargs.get("reasoning_effort") or
+                        request_kwargs.get("extra_body")) and code == 400:
                     request_kwargs.pop("reasoning_effort")
+                    request_kwargs.pop("extra_body", None)
                     continue
                 raise
-            if request_kwargs.get("reasoning_effort") and isinstance(e, TypeError):
+            if (request_kwargs.get("reasoning_effort") or
+                    request_kwargs.get("extra_body")) and isinstance(e, TypeError):
                 request_kwargs.pop("reasoning_effort")
+                request_kwargs.pop("extra_body", None)
                 continue
+            if attempt < 2:
+                _bump("llm_retries")
         if attempt < 2:
             time.sleep(2 * (attempt + 1))   # 2s, 4s — between attempts only
     if response is None:
         raise last_exc
 
+    if finish_reason == "length":
+        _bump("llm_length_finish")
+        _bump("llm_fallbacks")
+        if strict:
+            raise RuntimeError(
+                f"extract_turn: LLM output was truncated (model={model}). "
+                "strict_llm=True refuses the silent 0-patch fallback.")
+        return []
+    if not raw:
+        _bump("llm_fallbacks")
+        if strict:
+            raise RuntimeError(
+                f"extract_turn: LLM returned empty content (model={model}). "
+                "strict_llm=True refuses the silent 0-patch fallback.")
+        return []
+
     parsed = parse_extraction(raw)
+    if not parsed:
+        stripped = raw.strip()
+        try:
+            legit_empty = isinstance(json.loads(stripped), list) and not json.loads(stripped)
+        except (TypeError, ValueError):
+            legit_empty = False
+        if not legit_empty:
+            _bump("llm_parse_failures")
+            _bump("llm_fallbacks")
+            if strict:
+                raise RuntimeError(
+                    "extract_turn: LLM output is not a parseable JSON array "
+                    f"(model={model}, raw head={raw[:120]!r}). strict_llm=True "
+                    "refuses the silent 0-patch fallback.")
+        return []
 
     # pass 1: validate + fingerprint-dedup into `accepted`
     accepted: List[Dict[str, Any]] = []

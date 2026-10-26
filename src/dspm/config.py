@@ -41,26 +41,31 @@ BASE_BUDGET_FRACTIONS = {
 
 MAX_PAYLOAD_CHARS = 200
 
-# v0.1.10: auto-dense extraction — the fraction of digit-bearing words at
+# v0.1.10: auto-dense extraction -- the fraction of digit-bearing words at
 # which add_turn() routes a turn through the dense extraction funnel
 # (up to 10 patches) even when the memory was created with dense=False.
-# 0.05 ≈ one number per 20 words. Deliberately sensitive: MISSING dense
-# mode on a fact-dense document chunk loses most numeric facts at
-# extraction (the 70%/85% document-test failure mode).
-# NOTE (v0.1.13): the dense prompt is NOT a harmless superset of the
-# standard one — it carries document-mode rules, so it must stay safe
-# for conversation turns too. Verified live by scripts/smoke_conversation.py
-# (added v0.1.13, after 'set the webhook timeout to 30 seconds' was
-# misclassified as code by the v0.1.10 config rule).
 DENSE_AUTO_THRESHOLD = 0.05
 
 # v0.1.11: extraction output budget, in completion tokens.
-# v0.1.0–v0.1.10 hardcoded 2000 inside extract_turn. Live document testing
-# (three comparison rounds with gpt-oss models) showed reasoning models
-# spend output tokens on chain-of-thought BEFORE the visible content — a
-# 2000-token budget can be consumed entirely by reasoning, returning HTTP
-# 200 with EMPTY content and silently leaving the chunk with 0 patches.
-# 4000 covers low-effort reasoning plus a full 10-patch dense extraction.
-# Override per call with extract_turn(max_tokens=...) for providers that
-# cap completions below this.
 EXTRACT_MAX_TOKENS = 4000
+
+# v0.1.18 (instrumentation batch): LLM-call observability knobs.
+# LLM_STRICT_DEFAULT=False keeps the v0.1.17 silent-fallback behavior;
+# DSPMMemory(strict_llm=True) turns empty / finish_reason=="length" /
+# unparseable extraction output into a RuntimeError instead of a silent
+# 0-patch turn.
+LLM_STRICT_DEFAULT = False
+
+# v0.1.18: floor for extraction max_tokens. Reasoning models (gpt-oss et
+# al.) spend completion tokens on hidden chain-of-thought before any
+# visible text, so a small max_tokens returns HTTP 200 with EMPTY content.
+# The floor only binds when a caller passes an explicit max_tokens below
+# it; the default EXTRACT_MAX_TOKENS=4000 is unaffected.
+EXTRACT_MIN_TOKENS = 512
+
+# v0.1.18: where reasoning_effort travels in the request:
+#   "top"        -- v0.1.11 behavior: top-level kwarg (Groq accepts this)
+#   "extra_body" -- nested in extra_body, for stricter OpenAI-compatible
+#                   providers that reject unknown top-level kwargs
+#   "off"        -- never send it
+REASONING_PARAM_MODE = "top"

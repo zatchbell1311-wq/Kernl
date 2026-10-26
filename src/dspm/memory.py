@@ -107,7 +107,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from dspm.config import DEFAULT_BUDGET, DENSE_AUTO_THRESHOLD
+from dspm.config import DEFAULT_BUDGET, DENSE_AUTO_THRESHOLD, LLM_STRICT_DEFAULT
 from dspm.engine import DSPMEngine
 from dspm.extractor import extract_turn, numeric_density
 from dspm.patch import SemanticPatch, count_tokens
@@ -425,6 +425,11 @@ class DSPMMemory:
     def __init__(self, budget: int = DEFAULT_BUDGET, llm_client: Optional[Any] = None,
                  model: str = "gpt-4o-mini", dense: bool = False,
                  stable_order: bool = False, render_source_roles: bool = False,
+                 strict_llm: bool = LLM_STRICT_DEFAULT,
+                 feedback_context: bool = True,
+                 reasoning_param_mode: Optional[str] = None,
+                 max_tokens_floor: Optional[int] = None,
+                 protect_bound_wording: bool = False,
                  **kwargs: Any):
         self.budget = budget
         self.llm_client = llm_client
@@ -449,6 +454,18 @@ class DSPMMemory:
         # lines. Off by default -- it costs ~2 tokens per delivered line
         # and budgets were sized without it.
         self.render_source_roles = bool(render_source_roles)
+        self.strict_llm = bool(strict_llm)
+        self.feedback_context = bool(feedback_context)
+        self.reasoning_param_mode = reasoning_param_mode
+        self.max_tokens_floor = max_tokens_floor
+        self.protect_bound_wording = bool(protect_bound_wording)
+        self._llm_telemetry: Dict[str, int] = {
+            "llm_calls": 0, "llm_empty": 0, "llm_errors": 0,
+            "llm_retries": 0, "llm_length_finish": 0,
+            "llm_parse_failures": 0, "llm_fallbacks": 0,
+        }
+        self._superseded_log: List[Dict[str, Any]] = []
+        self._dedup_log: List[Dict[str, Any]] = []
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
         """Add a conversation turn and return the newly extracted patches."""
@@ -458,10 +475,15 @@ class DSPMMemory:
         dense = self.dense or numeric_density(text) >= DENSE_AUTO_THRESHOLD
         # v0.1.16 (review point 2): role threaded through -- it was accepted
         # here and then dropped on the floor.
+        recent = self._last_context if self.feedback_context else ""
         patches = extract_turn(self.llm_client, self.model, text, self.turns,
                                role=role,
-                               recent_context=self._last_context,
-                               dense=dense)
+                               recent_context=recent,
+                               dense=dense,
+                               strict=self.strict_llm,
+                               telemetry=self._llm_telemetry,
+                               reasoning_param_mode=self.reasoning_param_mode,
+                               max_tokens_floor=self.max_tokens_floor)
         # v0.1.17 (review point 4): the raw turn text is the extraction
         # INPUT -- counted whether or not extraction succeeds.
         self._conversation_tokens += count_tokens(text)
@@ -549,12 +571,27 @@ class DSPMMemory:
         # exact duplicate suppression (same type, same payload)
         for existing in self.patches:
             if existing.patch_type == patch.patch_type and existing.payload == patch.payload:
+                self._dedup_log.append({
+                    "kept": existing.patch_id, "dropped": patch.patch_id,
+                    "kind": "exact_same_type", "status": "merged",
+                    "at_turn": patch.turn_index,
+                })
                 return
         # cross-type exact duplicate criticals (same words, different type)
         if patch.is_critical:
             for existing in self.patches:
                 if existing.is_critical and existing.fingerprint == patch.fingerprint:
+                    self._dedup_log.append({
+                        "kept": existing.patch_id, "dropped": patch.patch_id,
+                        "kind": "exact_cross_type", "status": "merged",
+                        "at_turn": patch.turn_index,
+                    })
                     return
+        if patch.is_critical and self.protect_bound_wording:
+            guard = self._bound_wording_guard(patch)
+            if guard is not None:
+                self._dedup_log.append(guard)
+                return
         # critical supersession — collect ALL stale entries, then remove
         stale = []
         if patch.is_critical:
@@ -752,8 +789,40 @@ class DSPMMemory:
                 patch.recount()   # token_cost must reflect the baked payload
 
         for s in stale:
+            self._superseded_log.append({
+                "patch_id": s.patch_id, "patch_type": s.patch_type,
+                "payload": s.payload, "turn_index": s.turn_index,
+                "superseded_by": patch.patch_id, "at_turn": patch.turn_index,
+                "status": "superseded",
+            })
             self.patches.remove(s)
         self.patches.append(patch)
+
+    def _bound_wording_guard(self, patch: SemanticPatch) -> Optional[Dict[str, Any]]:
+        """Keep a bound critical when a marker-bearing plain echo would demote it."""
+        if not _has_revision_marker(patch.payload):
+            return None
+        if _bound_class(patch.payload) != "plain":
+            return None
+        new_nums = _numbers(patch.payload)
+        if not new_nums:
+            return None
+        new_words = _content_words(patch.payload)
+        for existing in self.patches:
+            if not existing.is_critical or existing.turn_index > patch.turn_index:
+                continue
+            if new_nums != _numbers(existing.payload):
+                continue
+            if _bound_class(existing.payload) not in ("upper", "lower", "exact"):
+                continue
+            if len(new_words & _content_words(existing.payload)) < 3:
+                continue
+            return {
+                "kept": existing.patch_id, "dropped": patch.patch_id,
+                "kind": "bound_wording_guard", "status": "merged",
+                "at_turn": patch.turn_index,
+            }
+        return None
 
     def _echo_bridge(self, patch: SemanticPatch,
                      existing: SemanticPatch) -> bool:
@@ -885,6 +954,36 @@ class DSPMMemory:
         """Return the list of every patch currently stored in memory."""
         return list(self.patches)
 
+    def dump_store(self, include_history: bool = False) -> Dict[str, Any]:
+        """Inspect active stored patches and, optionally, their merge history."""
+        rendered_ids = ({p.patch_id for p in self.selected_patches}
+                        if self._context_built else None)
+        records = []
+        for p in self.patches:
+            records.append({
+                "patch_id": p.patch_id,
+                "patch_type": p.patch_type,
+                "payload": p.payload,
+                "turn_index": p.turn_index,
+                "is_critical": p.is_critical,
+                "source_role": p.source_role,
+                "token_cost": p.token_cost,
+                "status": "active",
+                "last_rendered": (None if rendered_ids is None
+                                  else p.patch_id in rendered_ids),
+            })
+        out: Dict[str, Any] = {
+            "turns": self.turns,
+            "budget": self.budget,
+            "context_built": self._context_built,
+            "patches": records,
+            "llm_telemetry": dict(self._llm_telemetry),
+        }
+        if include_history:
+            out["superseded"] = list(self._superseded_log)
+            out["deduped"] = list(self._dedup_log)
+        return out
+
     @property
     def stats(self) -> Dict[str, Any]:
         """Return a summary of memory health, selected-critical retention, and token reduction rate.
@@ -922,7 +1021,7 @@ class DSPMMemory:
         for p in self.critical_patches:
             key = p.source_role or "unattributed"
             roles[key] = roles.get(key, 0) + 1
-        return {
+        result = {
             "turns": self.turns,
             "total_patches": len(self.patches),
             "critical_total": critical_total,
@@ -941,6 +1040,8 @@ class DSPMMemory:
             # -- 'unattributed' covers pre-0.1.17 notebooks.
             "critical_by_role": dict(sorted(roles.items())),
         }
+        result.update(self._llm_telemetry)
+        return result
 
     def reset(self) -> None:
         """Clear all stored memory and reset the context state."""
@@ -951,6 +1052,10 @@ class DSPMMemory:
         self._context_built = False
         self._conversation_tokens = 0
         self.engine.reset_ema()
+        for key in self._llm_telemetry:
+            self._llm_telemetry[key] = 0
+        self._superseded_log.clear()
+        self._dedup_log.clear()
 
     def set_budget(self, budget: int) -> None:
         """Update the token budget. Takes effect on the next get_context() call."""
