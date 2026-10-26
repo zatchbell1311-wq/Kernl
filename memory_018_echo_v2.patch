@@ -1,0 +1,196 @@
+--- dspm/memory.py (0.1.18 pristine paste)
++++ dspm/memory.py (echo v2, task 2b)
+@@ -412,6 +412,127 @@
+     return current or history
+ 
+ 
++# v0.1.18 (echo guard v2, task 2b): fed-back-context echo suppression.
++#
++# The turn-20 r2 failure (diag_out_r2, budget=60, feedback_context=True,
++# gpt-oss-20b): on a pure acknowledgement turn ("Acknowledged. Noted
++# search-index status; no SLA impact.") the extractor emitted five [DEC]
++# payloads built out of the fed-back CP12 context. Four were partial
++# echoes ("set alerts to 50", "set within to 2", "set duration to 90
++# days", "pod limit raised to 2Gi") that only bloated the store; the
++# fifth -- "Connect retry updated to 120 (was 300)", fused from two
++# trimmed context lines -- superseded the live p7_0 via rule (a) and
++# the live p2_0 via rule (a2), silently deleting two facts.
++#
++# Guard v1 (task 2) dropped only the fusion echo. Its single 0.8
++# context-coverage bar let every partial echo through: the model's glue
++# words ("set ... to 50") appear in neither the context nor the turn,
++# so they diluted the coverage fraction below the bar. v2 replaces
++# coverage percentages with attribution counts -- a payload is an echo
++# when EVERY token attributable to somewhere (turn or context) comes
++# from the context alone, and a confabulation when NO token is
++# attributable anywhere. Glue words are ignored: they are nobody's
++# evidence. Both v2 rules are deterministic, offline-testable, and
++# tuned on nothing except the turn-20 replay itself.
++#
++# Rule 1 (verbatim echo): the normalized payload is a substring of the
++# fed-back context and not of the turn -> "echo". Catches word-for-word
++# copies ("Automatic retries") at any payload length, including
++# 1-token payloads rule 2 is too conservative to touch.
++#
++# Rule 2 (fusion/partial echo): the payload shares >= 2 content tokens
++# with the context and ZERO with the current turn -> "echo". Catches
++# the stitched killer (connect/retry/120/300 from the context, only
++# "updated" is glue) AND the partial echoes v1 kept (alerts/50 from the
++# context, "set"/"to" glue). The zero-turn-share leg is the
++# false-positive guard: a genuine update restating the item it changes
++# ("Raise the alert threshold from 50 to 80 per month" -> "alert
++# threshold raised to 80 (was 50)") shares alert/threshold/80/50 with
++# the turn and always survives.
++#
++# Rule 3 (zero attribution): the payload shares no content token with
++# the turn OR the context, and has >= 3 content tokens (short
++# near-verbatim notes are exempt) -> "unattributed". The extractor is
++# shown exactly two texts; a payload overlapping neither was
++# confabulated (the r2 "pod limit raised to 2Gi" fragment). Known
++# cost, frozen in
++# test_guard_drops_heavily_paraphrased_feedback_documented_residual: a
++# heavily paraphrased genuine update whose wording shares nothing with
++# the turn ("Cut the alert volume in half" -> "user wants fewer
++# notifications") is dropped too. With the feedback fence on, payloads
++# restate the turn's nouns and numbers (as the fence rules ask), carry
++# turn tokens, and survive.
++#
++# Telemetry: rule 1+2 drops count in llm_echo_drops, rule 3 drops in
++# llm_unattributed_drops; both flow into stats/dump_store automatically
++# via the _llm_telemetry dict. Opt-in via DSPMMemory(echo_guard=True);
++# defaults are unchanged.
++
++_FEEDBACK_FENCE_OPEN = (
++    "=== FEEDBACK CONTEXT (REPLAY OF YOUR OWN PRIOR SUMMARY -- "
++    "FOR CONTINUITY ONLY, DO NOT EXTRACT FROM IT) BEGIN ==="
++)
++_FEEDBACK_FENCE_CLOSE = "=== FEEDBACK CONTEXT (DO NOT EXTRACT FROM IT) END ==="
++_FEEDBACK_FENCE_RULES = (
++    "The block above between the BEGIN/END markers is your own prior "
++    "summary of this conversation, replayed so you know what is already "
++    "stored. It is NOT part of the current turn. Never copy, quote, "
++    "reword, or derive any patch payload from it -- not even partially, "
++    "not even fused with current-turn content. Every patch must be fully "
++    "supported by the current turn text alone. If the current turn "
++    "states nothing new, return an empty JSON array. When a patch "
++    "updates an existing item, restate the item's name and value in the "
++    "payload so the change is traceable to this turn."
++)
++
++
++def _guard_content_tokens(text: str) -> set:
++    """Content tokens for the echo guard: the file's own _content_words
++    plus bare 1-char numbers. _content_words drops len<=1 tokens, and a
++    lone digit is a value word ("within 2" keeps its '2') -- losing it
++    made the v1 coverage bar miss the 'set within to 2' partial echo.
++    Digits are matched on word boundaries ONLY, so the '2' inside a
++    compound like '2Gi' is never split off to spuriously match a bare
++    '2' elsewhere (desk-check catch: without the anchor it would have
++    rescued the confabulated 'pod limit raised to 2Gi' from rule 3 by
++    colliding with the context's 'within 2')."""
++    toks = _content_words(text)
++    toks.update(re.findall(r"\b\d+(?:\.\d+)?\b", text.lower()))
++    return toks
++
++
++def _echo_guard_reason(payload: str, turn_text: str,
++                       context_text: str) -> Optional[str]:
++    """Classify one freshly extracted payload against the current turn
++    text and the fed-back context. Returns None (keep), "echo" (drop,
++    counted in llm_echo_drops), or "unattributed" (drop, counted in
++    llm_unattributed_drops). Deterministic and offline; see the guard
++    v2 comment block above for the rule-by-rule failure evidence."""
++    def _norm(s: str) -> str:
++        return re.sub(r"\s+", " ", (s or "").lower()).strip()
++
++    p_norm, t_norm, c_norm = _norm(payload), _norm(turn_text), _norm(context_text)
++    if not p_norm:
++        return None              # empty payload: not echo evidence
++    # Rule 1: verbatim context fragment the turn never states.
++    if p_norm in c_norm and p_norm not in t_norm:
++        return "echo"
++    p_toks = _guard_content_tokens(payload)
++    if not p_toks:
++        return None
++    turn_toks = _guard_content_tokens(turn_text)
++    ctx_toks = _guard_content_tokens(context_text)
++    in_turn = len(p_toks & turn_toks)
++    in_ctx_only = len(p_toks & ctx_toks - turn_toks)
++    # Rule 2: fusion/partial echo -- everything attributable is context.
++    if in_ctx_only >= 2 and in_turn == 0:
++        return "echo"
++    # Rule 3: zero attribution -- supported by neither text it was shown.
++    if in_turn + in_ctx_only == 0 and len(p_toks) >= 3:
++        return "unattributed"
++    return None
++
++
+ class DSPMMemory:
+     """Main user-facing memory object for DSPM.
+ 
+@@ -427,6 +548,8 @@
+                  stable_order: bool = False, render_source_roles: bool = False,
+                  strict_llm: bool = LLM_STRICT_DEFAULT,
+                  feedback_context: bool = True,
++                 feedback_fence: bool = False,
++                 echo_guard: bool = False,
+                  reasoning_param_mode: Optional[str] = None,
+                  max_tokens_floor: Optional[int] = None,
+                  protect_bound_wording: bool = False,
+@@ -456,6 +579,11 @@
+         self.render_source_roles = bool(render_source_roles)
+         self.strict_llm = bool(strict_llm)
+         self.feedback_context = bool(feedback_context)
++        # v0.1.18 (task 2/2b): opt-in echo suppressors -- see the guard
++        # v2 comment block above the class. Defaults preserve existing
++        # behavior exactly; nothing changes unless both are turned on.
++        self.feedback_fence = bool(feedback_fence)
++        self.echo_guard = bool(echo_guard)
+         self.reasoning_param_mode = reasoning_param_mode
+         self.max_tokens_floor = max_tokens_floor
+         self.protect_bound_wording = bool(protect_bound_wording)
+@@ -463,6 +591,7 @@
+             "llm_calls": 0, "llm_empty": 0, "llm_errors": 0,
+             "llm_retries": 0, "llm_length_finish": 0,
+             "llm_parse_failures": 0, "llm_fallbacks": 0,
++            "llm_echo_drops": 0, "llm_unattributed_drops": 0,
+         }
+         self._superseded_log: List[Dict[str, Any]] = []
+         self._dedup_log: List[Dict[str, Any]] = []
+@@ -476,6 +605,12 @@
+         # v0.1.16 (review point 2): role threaded through -- it was accepted
+         # here and then dropped on the floor.
+         recent = self._last_context if self.feedback_context else ""
++        # v0.1.18 (task 2): opt-in prompt fence -- wrap the fed-back
++        # context in do-not-extract markers plus rules, riding inside
++        # recent_context so no extractor.py change is involved.
++        if self.feedback_fence and recent:
++            recent = (f"{_FEEDBACK_FENCE_OPEN}\n{recent}\n"
++                      f"{_FEEDBACK_FENCE_CLOSE}\n{_FEEDBACK_FENCE_RULES}")
+         patches = extract_turn(self.llm_client, self.model, text, self.turns,
+                                role=role,
+                                recent_context=recent,
+@@ -484,6 +619,23 @@
+                                telemetry=self._llm_telemetry,
+                                reasoning_param_mode=self.reasoning_param_mode,
+                                max_tokens_floor=self.max_tokens_floor)
++        # v0.1.18 (echo guard v2, task 2b): drop payloads echoed out of
++        # the fed-back context (verbatim, fused, or partial) and
++        # confabulated payloads supported by neither shown text, BEFORE
++        # the merge rules can supersede anything with them. Gated on
++        # feedback_context: with it off the extractor is never shown a
++        # context, there is nothing to echo, and the guard stays inert.
++        if self.echo_guard and self.feedback_context and self._last_context:
++            kept: List[SemanticPatch] = []
++            for p in patches:
++                reason = _echo_guard_reason(p.payload, text, self._last_context)
++                if reason == "echo":
++                    self._llm_telemetry["llm_echo_drops"] += 1
++                elif reason == "unattributed":
++                    self._llm_telemetry["llm_unattributed_drops"] += 1
++                else:
++                    kept.append(p)
++            patches = kept
+         # v0.1.17 (review point 4): the raw turn text is the extraction
+         # INPUT -- counted whether or not extraction succeeds.
+         self._conversation_tokens += count_tokens(text)
