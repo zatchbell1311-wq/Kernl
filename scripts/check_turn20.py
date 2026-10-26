@@ -1,0 +1,15 @@
+import json
+d12 = json.load(open('diag_out_r2/b60_cp12.json'))
+d24 = json.load(open('diag_out_r2/b60_cp24.json'))
+d48 = json.load(open('diag_out_r2/b60_cp48.json'))
+s12, s24, s48 = d12['dump_store'], d24['dump_store'], d48['dump_store']
+print('CP12 CONTEXT:')
+print(d12['rendered_context'])
+print('CP12 VICTIMS:', [(p['patch_id'], p['patch_type'], p['payload'])
+      for p in s12['patches'] if p['patch_id'] in ('p2_0', 'p7_0')])
+print('KILLS AT TURN 20:', [(e['patch_id'], e['patch_type'], e['superseded_by'], e['payload'])
+      for e in s24['superseded'] if e['at_turn'] == 20])
+print('TURN-20 ACTIVES:', [(p['patch_id'], p['patch_type'], p['payload'])
+      for p in s24['patches'] if p['turn_index'] == 20])
+print('CP48 120-BEARING ACTIVES:', [(p['patch_id'], p['patch_type'], p['payload'])
+      for p in s48['patches'] if '120' in p['payload']])
