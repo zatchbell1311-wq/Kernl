@@ -275,7 +275,8 @@ def write_failure(out_dir: Path, budget: int, stage: str, i: int,
 
 # --- one budget arm ------------------------------------------------------------
 
-def run_arm(budget: int, conversation, out_dir: Path, pace: float, feedback: bool = True) -> str:
+def run_arm(budget: int, conversation, out_dir: Path, pace: float, feedback: bool = True,
+            echo_guard: bool = False, fence: bool = False) -> str:
     """Run one budget arm end-to-end. Returns 'complete', 'failed', or
     'aborted' (resume verification failed -- no quota spent)."""
     from dspm.memory import DSPMMemory
@@ -291,10 +292,11 @@ def run_arm(budget: int, conversation, out_dir: Path, pace: float, feedback: boo
         return "complete"
 
     client = make_client()
-    # Spec: strict_llm=True, everything else default. Constructed identically
-    # on fresh runs and resume (load() merges saved state into this instance).
+    # Constructed identically on fresh runs and resume (load() merges saved
+    # state into this instance).
     mem = DSPMMemory(budget=budget, llm_client=client, model=MODEL, strict_llm=True,
-                     feedback_context=feedback)
+                     feedback_context=feedback, echo_guard=echo_guard,
+                     feedback_fence=fence)
     state_file = state_path(out_dir, budget)
     start_index = 0
     resumed = False
@@ -413,6 +415,10 @@ def main(argv=None) -> int:
                         help=f"output directory (default {DEFAULT_OUT_DIR})")
     parser.add_argument("--no-feedback", action="store_true",
                         help="diagnostic: construct DSPMMemory with feedback_context=False")
+    parser.add_argument("--echo-guard", action="store_true",
+                        help="diagnostic: DSPMMemory(echo_guard=True)")
+    parser.add_argument("--fence", action="store_true",
+                        help="diagnostic: DSPMMemory(feedback_fence=True)")
     args = parser.parse_args(argv)
 
     # Windows console safety: a unicode payload must never crash a print.
@@ -456,7 +462,8 @@ def main(argv=None) -> int:
 
     statuses = {}
     for budget in ARMS:
-        statuses[budget] = run_arm(budget, conversation, out_dir, args.pace, not args.no_feedback)
+        statuses[budget] = run_arm(budget, conversation, out_dir, args.pace,
+                                   not args.no_feedback, args.echo_guard, args.fence)
 
     print("\n=== run summary ===")
     for budget in ARMS:
