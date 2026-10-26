@@ -37,3 +37,6 @@ bench_kv_cache_results.json
 diag_out*/
 *_analysis.txt
 echo_test_diff.txt
+.venv*/
+build/
+*.egg-info/
