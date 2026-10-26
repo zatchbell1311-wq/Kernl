@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.18] - 2026-10-26
+
+- feedback_context now defaults to False. With it on, budget-trimmed context
+  fed back into extraction was re-extracted as patches; in one run a fused
+  fragment superseded two real facts and delivery at budget 120 swung between
+  7/8 and 3/8 across identical runs. Pass feedback_context=True to restore the
+  old behavior.
+- New opt-in echo_guard=True (experimental): drops patches that echo the
+  fed-back context. It prevented the fact-deletion case in a live run but did
+  not stop filler decisions from crowding small budgets.
+- New opt-in feedback_fence=True (experimental, no live evidence).
+- New llm_echo_drops / llm_unattributed_drops telemetry.
+
 ## [0.1.17] - 2026-10-22
 
 ### Fixed
@@ -38,4 +51,3 @@
   max-users 500) merge by design; structured slots are the planned 0.1.18 fix. Documented by
   tier_trap's fifth split guard.
 - Also queued for 0.1.18: rule (a) multi-overlapping-slot sweep; rule (c) polarity-free pairs.
-

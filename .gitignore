@@ -34,3 +34,6 @@ dist/
 bench_kv_cache_results.json
 
 *.f?abak
+diag_out*/
+*_analysis.txt
+echo_test_diff.txt

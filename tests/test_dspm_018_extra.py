@@ -337,7 +337,7 @@ def test_reasoning_param_mode_off_omits_kwarg():
 # ---------------------------------------------------------------------------
 
 def test_feedback_context_flag_gates_recent_context_block():
-    """Item 10: with feedback_context=True (default), a set _last_context
+    """Item 10: with feedback_context=True, a set _last_context
     rides into the next extraction prompt under a 'Recent context:' block;
     with feedback_context=False it never does. _last_context is set
     directly instead of calling get_context() so this file stays
@@ -345,7 +345,7 @@ def test_feedback_context_flag_gates_recent_context_block():
     ctx = "[DEC] Escalation timeout set to 300 seconds"
 
     llm_on = FakeLLM(script=[DEC_300, WEBHOOK_DEC])
-    mem_on = DSPMMemory(llm_client=llm_on)
+    mem_on = DSPMMemory(llm_client=llm_on, feedback_context=True)
     mem_on.add_turn("user", "set the escalation timeout to 300 seconds")
     first_prompt = llm_on.calls[0]["messages"][1]["content"]
     assert "Recent context:" not in first_prompt  # _last_context empty on turn 0

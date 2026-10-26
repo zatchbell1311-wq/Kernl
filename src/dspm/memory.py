@@ -506,7 +506,7 @@ class DSPMMemory:
                  model: str = "gpt-4o-mini", dense: bool = False,
                  stable_order: bool = False, render_source_roles: bool = False,
                  strict_llm: bool = LLM_STRICT_DEFAULT,
-                 feedback_context: bool = True,
+                 feedback_context: bool = False,
                  feedback_fence: bool = False,
                  echo_guard: bool = False,
                  reasoning_param_mode: Optional[str] = None,

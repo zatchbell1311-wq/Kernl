@@ -148,6 +148,7 @@ def _prompt_text(client):
 def _seeded_memory(client, **kwargs):
     """Store state as it was at turn 20 of the r2 b60 run: p2_0 and p7_0
     active, CP12 context rendered, 20 turns ingested."""
+    kwargs.setdefault("feedback_context", True)
     m = DSPMMemory(budget=60, llm_client=client, **kwargs)
     for pid, tidx, ptype, payload in (
         ("p2_0", 2, "decision", P2_0),
@@ -347,11 +348,11 @@ def test_default_prompt_has_no_fence_and_context_still_fed():
 
 def test_new_flags_default_off_and_telemetry_keys_exposed():
     """Construction without the new kwargs must preserve existing
-    behavior: feedback on by default, both mitigations off, and both new
+    behavior: feedback off by default, both mitigations off, and both new
     telemetry keys present at zero in stats (they flow through
     result.update())."""
     m = DSPMMemory(budget=60)
-    assert m.feedback_context is True
+    assert m.feedback_context is False
     assert m.feedback_fence is False
     assert m.echo_guard is False
     assert m.stats["llm_echo_drops"] == 0
