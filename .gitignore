@@ -48,3 +48,4 @@ diag_out*/
 debug.log
 
 *_analysis.txt
+qdrant_local_db/
