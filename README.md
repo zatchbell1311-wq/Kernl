@@ -1,4 +1,4 @@
-````markdown
+
 # DSPM — Dynamic Semantic Patch Memory
 *by Dhruv Dubey*
 
@@ -387,4 +387,4 @@ Found a case where a constraint or revision is lost? Please [open an issue](http
 ## License
 
 MIT © 2026 Dhruv Dubey
-````
+
