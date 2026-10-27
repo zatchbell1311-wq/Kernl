@@ -1,3 +1,4 @@
+````markdown
 # DSPM — Dynamic Semantic Patch Memory
 *by Dhruv Dubey*
 
@@ -107,10 +108,10 @@ Adds sentence-transformer-based query alignment for better non-critical patch ra
 llm = OpenAI(api_key="sk-...")
 
 # Groq (free tier available)
-llm = OpenAI(base_url="https://api.groq.com/openai/v1", api_key="gsk-...")
+llm = OpenAI(base_url="https://api.groq.com/openai/v1", api_key="gsk_...")
 
 # Together AI
-llm = OpenAI(base_url="https://api.together.xyz/openai/v1", api_key="...")
+llm = OpenAI(base_url="https://api.together.xyz/v1", api_key="...")
 
 # Ollama (local, no key needed)
 llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
@@ -373,6 +374,8 @@ memory.set_budget(100)   # explicit alternative — same effect
 Dhruv Dubey, 2026  
 Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
+*Recognition:* Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), jointly organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
+
 ---
 
 ## Feedback
@@ -384,3 +387,4 @@ Found a case where a constraint or revision is lost? Please [open an issue](http
 ## License
 
 MIT © 2026 Dhruv Dubey
+````
