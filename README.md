@@ -116,6 +116,12 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 ---
 
+## What's New in 0.1.20
+
+- **Fixes a packaging bug from 0.1.19.** 0.1.19 bumped the version in `pyproject.toml` but not in `dspm/__init__.py`, so `dspm.__version__` incorrectly reported `"0.1.18"` even though the installed package was 0.1.19. No functional changes beyond the version string.
+
+---
+
 ## What's New in 0.1.18
 
 - **`feedback_context` now defaults to `False`.** In earlier versions the last rendered (budget-trimmed) context was fed back into the extraction prompt of the next turn. In our diagnostic runs the model sometimes re-extracted those trimmed lines as new patches. In one run a fused fragment (`Connect retry updated to 120 (was 300)`) superseded two real facts. Pass `feedback_context=True` to restore the old behavior.
@@ -374,3 +380,4 @@ Found a case where a constraint or revision is lost? Please [open an issue](http
 ## License
 
 MIT © 2026 Dhruv Dubey
+
