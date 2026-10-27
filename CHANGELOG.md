@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.20
+Fixes a packaging bug: 0.1.19 bumped the version in pyproject.toml but not in `dspm/__init__.py`, so `dspm.__version__` incorrectly reported "0.1.18" despite being installed as 0.1.19. No functional code changes beyond the version string fix.
+
 ## 0.1.19
 Docs and repo hygiene only, no code changes.
 - Fixed README repo links (Kernl, not dspm)
