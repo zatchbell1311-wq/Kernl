@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19
+Docs and repo hygiene only, no code changes.
+- Fixed README repo links (Kernl, not dspm)
+- Corrected an unconfirmed diagnostic table cell to "n/a"
+- Updated CHANGELOG wording for deferred items
+- Removed diagnostic scratch output and logs from version control
+
 ## [0.1.18] - 2026-10-26
 
 - feedback_context now defaults to False. With it on, budget-trimmed context

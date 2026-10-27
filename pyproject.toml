@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dspm-memory"
-version = "0.1.18"
+version = "0.1.19"
 description = "Training-free conversation memory with structural critical-constraint retention and budgeted context rendering"
 readme = "README.md"
 requires-python = ">=3.9"
