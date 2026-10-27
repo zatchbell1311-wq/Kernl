@@ -5,7 +5,7 @@ Compress multi-turn LLM conversations while keeping every constraint, decision a
 
 At a 250-token budget, DSPM reduced tokens by about 83% in our benchmark suite while retaining 100% of critical patches. Under very small budgets, rendered lines are trimmed hard and some facts may be stored but not shown. See [Known Limitations](#known-limitations).
 
-[![PyPI version](https://badge.fury.io/py/dspm-memory.svg)](https://pypi.org/project/dspm-memory/)
+![PyPI version](https://img.shields.io/pypi/v/dspm-memory)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 
