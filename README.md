@@ -52,7 +52,7 @@ print(memory.stats)
 
 Only the 10-second entry remains; the 30-second setting is superseded. At even tinier budgets the revision story is kept in minimal form, e.g. `10 (was 30)`.
 
-> **Try to break it:** give it a conversation where a value changes several times under a very small budget, and [open an issue](https://github.com/zatchbell1311-wq/dspm) if a constraint or revision is lost.
+> **Try to break it:** give it a conversation where a value changes several times under a very small budget, and [open an issue](https://github.com/zatchbell1311-wq/Kernl) if a constraint or revision is lost.
 
 ---
 
@@ -201,7 +201,7 @@ One synthetic 48-message alerting-pipeline conversation (12 core messages, 36 fi
 |---|---|---|
 | `feedback_context=False` (new default) | 7/8, 7/8 | 3/8, 3/8 |
 | `feedback_context=True`, no guard | 7/8, 3/8 | 2/8, 2/8 |
-| `feedback_context=True` + `echo_guard=True` (one run) | 3/8 | 3/8 |
+| `feedback_context=True` + `echo_guard=True` (one run) | 3/8 | n/a |
 
 What we observed:
 
@@ -367,7 +367,7 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 ## Feedback
 
-Found a case where a constraint or revision is lost? Please [open an issue](https://github.com/zatchbell1311-wq/dspm) with the conversation and the budget you used.
+Found a case where a constraint or revision is lost? Please [open an issue](https://github.com/zatchbell1311-wq/Kernl) with the conversation and the budget you used.
 
 ---
 
