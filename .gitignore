@@ -42,3 +42,9 @@ build/
 *.egg-info/
 .venv*/
 %TEMP%/
+
+diag_out*/
+
+debug.log
+
+*_analysis.txt
