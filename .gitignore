@@ -40,3 +40,5 @@ echo_test_diff.txt
 .venv*/
 build/
 *.egg-info/
+.venv*/
+%TEMP%/
