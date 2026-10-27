@@ -37,9 +37,10 @@ Docs and repo hygiene only, no code changes.
 - **Verified replays** - budget 59: `crr=100` with two spare capacity slots; variance probe delivers 7/7; starvation honesty reports `store=8, delivered=3, crr=37` instead of over-delivering.
 
 ### Known issues (repro locked, fix queued for a later release)
-- **S3 trim quality** - at budget 59 the delivered revision line can lose the `(was X)` span form and the subject noun ("timeout 10 seconds, 30 seconds"); the current value always survives. Locked in as the `trim_quality` harness repro.
-- **(b4) scope-noun limitation** - same-number scope-noun pairs (e.g. org-admins / max-users 500) merge by design; structured slots are planned for a later release. Documented by `tier_trap`'s fifth split guard.
-
-### Also queued for a later release
-- rule (a) multi-overlapping-slot sweep
-- rule (c) polarity-free pairs
+- **S3 trim quality** - at budget 59 the delivered revision line can lose the (was X) span
+  form and the subject noun ("timeout 10 seconds, 30 seconds"); the current value always
+  survives. Locked in as the trim_quality harness repro.
+- **(b4) scope-noun limitation** - same-number scope-noun pairs (e.g. org-admins /
+  max-users 500) merge by design; structured slots are the planned 0.1.18 fix. Documented by
+  tier_trap's fifth split guard.
+- Also queued for a later release: rule (a) multi-overlapping-slot sweep; rule (c) polarity-free pairs.
