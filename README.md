@@ -1,11 +1,13 @@
 # DSPM — Dynamic Semantic Patch Memory
 *by Dhruv Dubey*
 
+Python package: dspm-memory · Repo: Kernl
+
 Compress multi-turn LLM conversations while keeping every constraint, decision and revision in the memory store.
 
-At a 250-token budget, DSPM reduced tokens by about 83% in our benchmark suite while retaining 100% of critical patches. Under very small budgets, rendered lines are trimmed hard and some facts may be stored but not shown. See [Known Limitations](#known-limitations).
+At a 250-token budget, DSPM reduced tokens by about 83% in our benchmark suite while retaining 100% of critical patches (same model family extracted and judged; not independently replicated). Savings depend on conversation length: our early pilot on short conversations at budget 250 showed almost no compression. Under very small budgets, rendered lines are trimmed hard and some facts may be stored but not shown. See [Known Limitations](#known-limitations).
 
-![PyPI version](https://img.shields.io/pypi/v/dspm-memory)
+[![PyPI version](https://img.shields.io/pypi/v/dspm-memory)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 
@@ -52,13 +54,13 @@ print(memory.stats)
 
 Only the 10-second entry remains; the 30-second setting is superseded. At even tinier budgets the revision story is kept in minimal form, e.g. `10 (was 30)`.
 
-> **Try to break it:** give it a conversation where a value changes several times under a very small budget, and [open an issue](https://github.com/zatchbell1311-wq/Kernl) if a constraint or revision is lost.
+> **Try to break it:** give it a conversation where a value changes several times under a very small budget, and [open an issue](https://github.com/zatchbell1311-wq/Kernl/issues) if a constraint or revision is lost.
 
 ---
 
 ## The Problem
 
-Long conversations eat your context window. Naive truncation drops the constraint from turn 3 that the entire system depends on. DSPM is built so that does not happen.
+Long conversations eat your context window. Naive truncation drops the constraint from turn 3 that the entire system depends on. DSPM is designed to prevent this, with the limits described below.
 
 ---
 
@@ -105,10 +107,10 @@ Adds sentence-transformer-based query alignment for better non-critical patch ra
 llm = OpenAI(api_key="sk-...")
 
 # Groq (free tier available)
-llm = OpenAI(base_url="https://api.groq.com/openai/v1", api_key="gsk_...")
+llm = OpenAI(base_url="https://api.groq.com/openai/v1", api_key="gsk-...")
 
 # Together AI
-llm = OpenAI(base_url="https://api.together.xyz/v1", api_key="...")
+llm = OpenAI(base_url="https://api.together.xyz/openai/v1", api_key="...")
 
 # Ollama (local, no key needed)
 llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
@@ -118,9 +120,11 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 ## What's New in 0.1.20
 
-- **Fixes a packaging bug from 0.1.19.** 0.1.19 bumped the version in `pyproject.toml` but not in `dspm/__init__.py`, so `dspm.__version__` incorrectly reported `"0.1.18"` even though the installed package was 0.1.19. No functional changes beyond the version string.
+- **Fixes a packaging bug from 0.1.19.** 0.1.19 bumped the version in `pyproject.toml` but not in `src/dspm/__init__.py`, so `dspm.__version__` incorrectly reported `"0.1.18"` even though the installed package was 0.1.19. No functional changes beyond the version string.
 
----
+## What's New in 0.1.19
+
+- Docs and repo hygiene.
 
 ## What's New in 0.1.18
 
@@ -257,7 +261,7 @@ python experiments/bench_kv_live.py
 │   ├── memory.py
 │   ├── engine.py
 │   └── persistence.py
-├── tests/                        # 150 offline tests (pytest)
+├── tests/                        # 151 offline tests (pytest)
 ├── scripts/                      # live smoke gates and diagnostics (need GROQ_API_KEY)
 │   ├── smoke_conversation.py
 │   ├── diag_smoke_criticals.py
@@ -373,11 +377,10 @@ Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
 ## Feedback
 
-Found a case where a constraint or revision is lost? Please [open an issue](https://github.com/zatchbell1311-wq/Kernl) with the conversation and the budget you used.
+Found a case where a constraint or revision is lost? Please [open an issue](https://github.com/zatchbell1311-wq/Kernl/issues) with the conversation and the budget you used.
 
 ---
 
 ## License
 
 MIT © 2026 Dhruv Dubey
-
