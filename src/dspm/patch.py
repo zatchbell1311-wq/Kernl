@@ -7,6 +7,12 @@ compression-oriented bookkeeping fields used in the engine.
 v0.1.10: no functional changes — the data model already supports
 auto-dense extraction and document ingestion. Only unused imports
 (dataclasses.field, config.PATCH_TYPES) were removed.
+
+v0.1.17: source_role field -- the speaker label captured at add_turn()
+time, so a saved notebook distinguishes user requirements from
+assistant echoes (review point 2, storage half). Optional with a None
+default: pre-0.1.17 notebooks and manual test patches load as
+unattributed.
 """
 
 from __future__ import annotations
@@ -14,9 +20,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
-from typing import List
+from typing import List, Optional
 
-import tiktoken
+try:
+    # Accurate cl100k_base counting when available. The guarded import
+    # keeps the package importable (tests, benchmarks) in tiktoken-less
+    # environments; count_tokens() then uses its deterministic fallback.
+    import tiktoken
+except ImportError:  # pragma: no cover - only hit without the optional dep
+    tiktoken = None
 
 from dspm.config import MAX_PAYLOAD_CHARS, CRITICAL_TYPES, SHORT_TAGS
 
@@ -51,6 +63,10 @@ class SemanticPatch:
     is_delta: bool = False
     delta_base: str = ""
     causal_depth: int = 0
+    # v0.1.17 (review point 2, storage half): speaker attribution, set by
+    # add_turn() right after extraction. None = manual patch or
+    # pre-0.1.17 notebook (loads as unattributed).
+    source_role: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Normalize fields, clamp payload length, and compute bookkeeping values."""

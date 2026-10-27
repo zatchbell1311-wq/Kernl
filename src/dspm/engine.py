@@ -29,6 +29,35 @@ the minimal revision story now includes the subject ("timeout 10 (was
 30)" not just "10 (was 30)"). Also adds more domain key nouns from the
 baseline conversations (encryption, deployment, anonymization, sync,
 binary, battery, cold, startup, background, etc.).
+
+v0.1.16: polarity-preserving trimming (reviewer finding: "100% CRR
+means the memory items remain, but important words like 'not' or 'less
+than' could still be lost"). In the v0.1.15 ladder those words were
+filler (priority 10) — under budget pressure "dashboard must load in
+under 2 seconds" became "dashboard 2 seconds", and "Payments must not
+be stored in plaintext" lost its negation at the 2-word floor,
+inverting the constraint while CRR reported 100. Comparators now bind
+to their numbers as atomic spans ("less than 100 milliseconds", "no
+more than 3 retries"), negations bind to the word they negate ("not
+stored"), and both outrank key nouns. Also: the T5 recency reference
+now floors at the newest patch's turn_index (callers whose turn
+counter lags — direct _merge_patch users, notebooks loaded with a
+stale turns value — previously got a flat 1.0 recency for every patch,
+the latent test_recency_prefers_recent_noncritical failure in clean
+environments), and DSPMEngine(stable_order=True) emits patches in
+(turn_index, patch_id) order for prefix-cache friendliness (see
+experiments/bench_kv_cache.py).
+
+v0.1.17 F6 (20-run live gate, run 19): comma-form revision
+history. The live extractor also emits "10 seconds, was 30
+seconds" -- no "(was" marker. Those payloads floored at 2 words,
+"was" scored as filler, and a 2-word allowance delivered "[DEC]
+10 seconds," with the replaced value gone entirely. _word_floor
+recognizes the comma form now, the minimal-story path normalizes
+it to the canonical "10 (was 30)", and a "(was 30 seconds)" span
+with the unit inside the parens compacts to "10 (was 30)" at
+the floor instead of falling through to the valueless ladder
+result.
 """
 
 from __future__ import annotations
@@ -80,7 +109,8 @@ class DSPMEngine:
         r"encryption|deploy|deployment|region|database|anonymization|"
         r"compliance|sync|binary|battery|startup|background|offline|"
         r"monitoring|alerting|backup|scaling|instance|storage|"
-        r"retention|pipeline|training|retention)s?"
+        r"retention|pipeline|training|dashboard|page|screen|response|"
+        r"request|retr(y|ies))s?"
     )
     # v0.1.9: temporal VALUES ("Friday", "March", "Q3", "2026") — when
     # attached to a key noun, they ARE the constraint's value and get
@@ -93,9 +123,58 @@ class DSPMEngine:
         r"september|october|november|december|"
         r"q[1-4]|20\d\d)s?"
     )
+    # v0.1.16: polarity vocabulary. Negations and comparators were
+    # scored as filler (priority 10) by the v0.1.15 ladder, so tight
+    # budgets produced "dashboard 2 seconds" from "dashboard must load
+    # in under 2 seconds" and "Payments must" from "Payments must not
+    # be stored in plaintext" — CRR stayed 100 while the direction or
+    # polarity of the constraint was lost or inverted.
+    _NEGATION_WORDS = (
+        "not", "no", "never", "without", "cannot", "can't",
+        "mustn't", "don't", "doesn't", "won't", "cant", "mustnt",
+    )
+    # comparator PHRASES (matched as cleaned word tuples) that bind to
+    # the number that follows: "less than 100", "no more than 3",
+    # "must not exceed 10". Longer phrases are listed first so
+    # "no more than" wins over a bare "more than" scan position.
+    _COMP_PHRASES = (
+        ("no", "more", "than"), ("no", "less", "than"),
+        ("no", "fewer", "than"),
+        ("not", "more", "than"), ("not", "less", "than"),
+        ("not", "fewer", "than"),
+        ("must", "not", "exceed"), ("must", "never", "exceed"),
+        ("not", "exceed"), ("not", "exceeds"),
+        ("not", "exceeded"), ("not", "exceeding"),
+        ("less", "than"), ("fewer", "than"), ("more", "than"),
+        ("at", "least"), ("at", "most"), ("up", "to"),
+    )
+    # single-word comparators that bind when DIRECTLY followed by a
+    # number: "under 2 seconds", "exactly 5 years", "max 3 retries".
+    _COMP_SINGLE = (
+        "under", "below", "above", "over", "within", "exactly",
+        "approximately", "exceed", "exceeds", "exceeded",
+        "exceeding", "max", "min", "maximum", "minimum",
+    )
+    # words the negation binder may skip while looking for the word it
+    # negates ("not be stored" -> "not stored").
+    _BIND_SKIP = (
+        "be", "is", "are", "was", "were", "been", "being", "the",
+        "a", "an", "to", "in", "on", "at", "for", "of", "or", "and",
+        "than", "must", "should", "will", "shall", "may", "might",
+        "can", "could", "our", "any", "all",
+    )
+    # v0.1.17 F6: prose history markers that may directly precede
+    # the replaced value in a comma-form revision ("10 seconds,
+    # was 30 seconds", "... previously 30 seconds"). The floor and
+    # the minimal-story path both use them.
+    _HISTORY_MARKERS = (
+        "was", "were", "previous", "previously", "prior",
+        "earlier", "formerly", "superseded",
+    )
 
-    def __init__(self, budget: int = DEFAULT_BUDGET):
+    def __init__(self, budget: int = DEFAULT_BUDGET, stable_order: bool = False):
         self.budget = budget
+        self.stable_order = stable_order
         self.ema_query = {t: 0.0 for t in PATCH_TYPES}
         self._embedder = None
 
@@ -143,6 +222,16 @@ class DSPMEngine:
         # T7 adaptive budgeting
         selected = self._adaptive_budgeting(selected)
         diagnostics["stages"].append("T7")
+
+        # v0.1.16: optional stable output ordering — (turn_index, patch_id)
+        # instead of the utility-ranked selection order. A stable order
+        # means a mid-conversation revision only invalidates the KV prefix
+        # cache from that patch's position onward, instead of reordering
+        # the whole context every turn. Off by default (preserves the
+        # v0.1.15 output order); see experiments/bench_kv_cache.py for the
+        # measurement.
+        if self.stable_order:
+            selected = sorted(selected, key=lambda p: (p.turn_index, p.patch_id))
 
         # v0.1.10: report the OUTPUT, not the input — "selected" and
         # "tokens" were previously frozen at their pre-compression values.
@@ -245,7 +334,12 @@ class DSPMEngine:
         constant and never affected ranking. Older patches now decay
         relative to the current turn, matching the paper's description.
         The default keeps backward compatibility for direct callers."""
-        # recency reference can never be older than the newest patch
+        # v0.1.16: the recency reference can never be older than the
+        # newest patch — callers whose turn counter lags (direct
+        # _merge_patch users, notebooks loaded with a stale turns value)
+        # previously got a flat 1.0 recency for every patch, disabling
+        # the decay entirely (the latent test_recency failure in clean
+        # environments).
         if patches:
             current_turn = max(current_turn,
                                max(p.turn_index for p in patches))
@@ -304,7 +398,18 @@ class DSPMEngine:
         revision story — the story form '10 (was 30)' IS the floor, and
         trimming below it destroys the revision history while the
         current value survives (the live webhook-rematch failure)."""
-        return 3 if "(was" in payload else 2
+        # v0.1.17 F6 (20-run live gate, run 19): the live
+        # extractor also emits comma-form history ("10 seconds,
+        # was 30 seconds") -- no "(was" marker, so it floored at
+        # 2, the 2-word allowance delivered "10 seconds," and the
+        # replaced value was gone.
+        if "(was" in payload:
+            return 3
+        if re.search(r"\b(?:was|were|previous(?:ly)?|prior|earlier|"
+                     r"formerly|superseded)\s+\S*\d",
+                     payload, re.IGNORECASE):
+            return 3
+        return 2
 
     def _shadow_selection(self, work: Sequence[SemanticPatch]) -> Tuple[List[SemanticPatch], Dict[str, Any]]:
         """T6: select critical patches, score non-critical patches, and fit under budget tokens."""
@@ -390,9 +495,13 @@ class DSPMEngine:
     def _trim_numeric_first(self, payload: str, max_words: int) -> str:
         """Trim payload to max_words. Number+unit pairs and '(was X)'
         replacement spans are atomic; selection priority: number-spans >
-        temporal-after-key-noun (90) > was-spans (60) > key nouns and
-        compound units (50) > number-adjacent words (40) > proper nouns
-        (20) > filler (10). Payloads carrying a '(was X)' span at an
+        temporal-after-key-noun (90) > negations (80) > was-spans (60) >
+        key nouns and compound units (50) > number-adjacent words (40) >
+        proper nouns (20) > filler (10). v0.1.16: comparator phrases
+        bind to their numbers ("less than 100", "no more than 3") at
+        number priority, and negations bind to the word they negate
+        ("not stored") — a bound without its direction, or a negation
+        without its verb, is a different constraint. Payloads carrying a '(was X)' span at an
         allowance of <= 3 words return the minimal story 'timeout 10
         (was 30)' — subject + current value + history. A post-fill
         guarantee ensures number-bearing results always include their
@@ -413,14 +522,42 @@ class DSPMEngine:
         # Only returns when the story fits within max_words — otherwise
         # falls through to the ladder, so callers trimming toward the
         # floor always make strict progress (no live-lock).
-        if max_words <= 3 and any(w.lower().startswith("(was") for w in words):
-            was_start = next(i for i, w in enumerate(words)
-                             if w.lower().startswith("(was"))
-            j = was_start
-            while j < len(words) and not words[j].endswith(")"):
-                j += 1
-            was_end = min(j, len(words) - 1)
-            span = words[was_start:was_end + 1]
+        # v0.1.17 F6 (20-run live gate, run 19): revision history
+        # comes in two shapes -- the baked paren form "(was 30)"
+        # and the comma form a live extractor emits ("10 seconds,
+        # was 30 seconds"). Only the paren form was recognized,
+        # so comma-form payloads missed the minimal-story floor
+        # and the ladder kept the current value while dropping
+        # the replaced one entirely ("[DEC] 10 seconds,").
+        was_start = None
+        paren_form = False
+        for i, w in enumerate(words):
+            if w.lower().startswith("(was"):
+                was_start, paren_form = i, True
+                break
+        if was_start is None:
+            for i, w in enumerate(words):
+                if (w.lower().strip(".,;:") in self._HISTORY_MARKERS
+                        and i + 1 < len(words)
+                        and re.search(r"\d", words[i + 1])):
+                    was_start, paren_form = i, False
+                    break
+        if max_words <= 3 and was_start is not None:
+            if paren_form:
+                j = was_start
+                while j < len(words) and not words[j].endswith(")"):
+                    j += 1
+                was_end = min(j, len(words) - 1)
+                span = words[was_start:was_end + 1]
+            else:
+                # comma form normalizes to the canonical story
+                # tokens: "was 30 seconds" -> "(was 30)"
+                span = ["(was", words[was_start + 1].rstrip(".,;:)") + ")"]
+            if len(span) > 2:
+                # the history unit is droppable: "10 (was 30
+                # seconds)" costs four words, "10 (was 30)"
+                # carries the same revision story in three.
+                span = [span[0], span[1].rstrip(".,;:)") + ")"]
             current = next((words[i] for i in range(was_start)
                             if re.search(r"\d", words[i])), None)
             # v0.1.14: find the key noun BEFORE the current value
@@ -441,8 +578,9 @@ class DSPMEngine:
             # story doesn't fit — fall through to the normal ladder
 
         # ── 1. identify protected spans ──────────────────────────────
-        spans = []          # (start, end, priority)
+        spans = []          # (start, end, priority, fallbacks)
         claimed = set()
+        pinned = {}         # v0.1.16: word index -> priority (negation binder)
         i = 0
         while i < len(words):
             # v0.1.9: "(was 30 seconds)" replacement span — keep whole
@@ -451,26 +589,97 @@ class DSPMEngine:
                 while j < len(words) and not words[j].endswith(")"):
                     j += 1
                 end = min(j, len(words) - 1)
-                spans.append((i, end, 60))
+                spans.append((i, end, 60, []))
                 claimed.update(range(i, end + 1))
                 i = end + 1
                 continue
+            # v0.1.16: comparator phrase + number (+unit) — atomic. The
+            # comparator IS part of the value: "latency 100 ms" from
+            # "latency less than 100 ms" is a different constraint.
+            lw = words[i].lower().strip(".,;)")
+            matched_phrase = False
+            for phrase in self._COMP_PHRASES:
+                L = len(phrase)
+                if lw == phrase[0] and i + L <= len(words):
+                    cleaned = tuple(
+                        w.lower().strip(".,;)") for w in words[i:i + L])
+                    if cleaned == phrase:
+                        end = i + L - 1
+                        num_i = None
+                        if end + 1 < len(words) and re.search(r"\d", words[end + 1]):
+                            num_i = end + 1
+                            end = num_i
+                            if end + 1 < len(words) and re.fullmatch(
+                                    self._UNIT_WORDS,
+                                    words[end + 1].lower().strip(".,;)")):
+                                end += 1
+                        fallbacks = []
+                        if num_i is not None:
+                            # graceful degradation, in order: phrase +
+                            # number (drop the trailing unit — direction
+                            # outranks the unit), then number + unit
+                            # (drop the phrase), then the bare number —
+                            # a direction without a value is noise.
+                            fallbacks.append((i, num_i))
+                            if end > num_i:
+                                fallbacks.append((num_i, end))
+                            fallbacks.append((num_i, num_i))
+                        spans.append((i, end, 100, fallbacks))
+                        claimed.update(range(i, end + 1))
+                        i = end + 1
+                        matched_phrase = True
+                        break
+            if matched_phrase:
+                continue
+            # v0.1.16: single-word comparator directly before a number —
+            # "under 2 seconds", "exactly 5 years", "max 3 retries".
+            if lw in self._COMP_SINGLE and i + 1 < len(words) \
+                    and re.search(r"\d", words[i + 1]):
+                end = i + 1
+                if end + 1 < len(words) and re.fullmatch(
+                        self._UNIT_WORDS,
+                        words[end + 1].lower().strip(".,;)")):
+                    end += 1
+                fallbacks = [(i, i + 1)]          # comparator + number
+                if end > i + 1:
+                    fallbacks.append((i + 1, end))  # number + unit
+                spans.append((i, end, 100, fallbacks))
+                claimed.update(range(i, end + 1))
+                i = end + 1
+                continue
+            # v0.1.16: negation binder — "not (be) stored" pins BOTH
+            # words at priority 80. A negation without the word it
+            # negates is not a constraint ("Payments must not" bans
+            # nothing); a verb without its negation inverts the meaning.
+            if lw in self._NEGATION_WORDS:
+                j = i + 1
+                while j < len(words) and j <= i + 3 \
+                        and words[j].lower().strip(".,;)") in self._BIND_SKIP:
+                    j += 1
+                if j < len(words) and j <= i + 3 and j not in claimed:
+                    pinned[i] = 80
+                    pinned[j] = 80
+                    i = j + 1
+                    continue
+                # nothing to bind — the word scorer still gives the bare
+                # negation priority 80
+                pinned[i] = 80
             # compound unit: "per minute" / "an hour" / "a day"
             if re.fullmatch(r"per|an|a", words[i].lower()) and i + 1 < len(words) \
                     and re.fullmatch(r"(second|minute|hour|day|week|month|year)s?",
                                      words[i + 1].lower().strip(".,;)")):
-                spans.append((i, i + 1, 50))
+                spans.append((i, i + 1, 50, []))
                 claimed.update((i, i + 1)); i += 2; continue
             # number + its unit: "30 seconds", "15 minutes", "500 mb"
             if re.search(r"\d", words[i]) and i + 1 < len(words) \
                     and re.fullmatch(self._UNIT_WORDS,
                                      words[i + 1].lower().strip(".,;)")):
-                spans.append((i, i + 1, 100))
+                spans.append((i, i + 1, 100, []))
                 claimed.update((i, i + 1)); i += 2; continue
             i += 1
 
         # ── 2. score remaining standalone words ─────────────────────
-        items = [(prio, -s, s, e) for (s, e, prio) in spans]
+        items = [(prio, -s, s, e, fb) for (s, e, prio, fb) in spans]
         key_noun_words = []     # v0.1.14: track which words are key nouns
         for j, w in enumerate(words):
             if j in claimed:
@@ -478,6 +687,8 @@ class DSPMEngine:
             w_clean = w.lower().strip(".,;)")
             if re.search(r"\d", w):
                 prio = 100                    # bare number
+            elif j in pinned:
+                prio = pinned[j]              # v0.1.16: negation / bound word
             elif j > 0 and re.search(r"\d", words[j - 1]):
                 prio = 40                    # number-adjacent ("requests")
             # v0.1.9: temporal VALUE directly after a key noun —
@@ -489,6 +700,11 @@ class DSPMEngine:
                                    words[j - 1].lower().strip(".,;)"))
                   and re.fullmatch(self._TEMPORALS, w_clean)):
                 prio = 90                    # temporal value of a constraint
+            elif w_clean in self._NEGATION_WORDS:
+                prio = 80                    # v0.1.16: unbound negation
+            elif w_clean in self._COMP_SINGLE \
+                    or w_clean in ("than", "least", "most"):
+                prio = 70                    # v0.1.16: leftover comparator
             elif re.fullmatch(self._KEY_NOUNS, w_clean):
                 prio = 50                    # v0.1.14: constraint subject (was 30)
                 key_noun_words.append(j)
@@ -496,15 +712,21 @@ class DSPMEngine:
                 prio = 20                    # proper noun
             else:
                 prio = 10                    # filler
-            items.append((prio, -j, j, j))
+            items.append((prio, -j, j, j, []))
 
         # ── 3. greedy fill: priority desc, ties → earlier word ──────
         items.sort(reverse=True)
         keep, used = set(), 0
-        for (prio, _neg, s, e) in items:
-            if used + (e - s + 1) <= max_words:
-                keep.update(range(s, e + 1))
-                used += (e - s + 1)
+        # v0.1.16: spans with fallbacks try the full range first, then
+        # degrade (comparator spans: phrase+number → number+unit →
+        # number) so a span that cannot fit whole still places its most
+        # meaningful subset instead of vanishing entirely.
+        for (prio, _neg, s, e, fb) in items:
+            for (fs, fe) in [(s, e)] + list(fb):
+                if used + (fe - fs + 1) <= max_words:
+                    keep.update(range(fs, fe + 1))
+                    used += (fe - fs + 1)
+                    break
 
         # ── 3b. v0.1.14: key-noun guarantee ─────────────────────────
         # If the payload contains numbers but no key noun survived the
@@ -518,9 +740,17 @@ class DSPMEngine:
             if best_noun not in keep:
                 # find the lowest-priority word to drop (a filler or
                 # proper noun, not a number or unit)
+                # v0.1.16: never swap out a negation or comparator to
+                # make room for the key noun — the subject noun can be
+                # inferred from context, an inverted bound cannot.
                 drop_candidates = [j for j in keep
                                    if not re.search(r"\d", words[j])
-                                   and j not in claimed]
+                                   and j not in claimed
+                                   and j not in pinned
+                                   and words[j].lower().strip(".,;)")
+                                       not in self._NEGATION_WORDS
+                                   and words[j].lower().strip(".,;)")
+                                       not in self._COMP_SINGLE]
                 if drop_candidates:
                     drop = min(drop_candidates,
                                key=lambda j: (words[j].lower().strip(".,;)") in

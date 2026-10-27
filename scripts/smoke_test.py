@@ -14,7 +14,7 @@ print(f"   extracted {len(p1)} patches")
 for p in p1:
     print(f"   [{p.patch_type[:4].upper()}] {p.payload}")
 
-print("== Turn 2 ==")
+print("\n== Turn 2 ==")
 p2 = memory.add_turn("assistant", "FastAPI chosen with async SQLAlchemy; Redis cache TTL raised 60s to 300s for listings.")
 print(f"   extracted {len(p2)} patches")
 for p in p2:

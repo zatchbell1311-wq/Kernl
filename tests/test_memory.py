@@ -857,3 +857,932 @@ def test_different_subjects_not_collapsed():
         f"different subjects wrongly collapsed: {crits}"
     assert any('cloud' in c.lower() for c in crits)
     assert any('training' in c.lower() for c in crits)
+
+
+# ── v0.1.16: polarity-preserving trimming + bound-aware collapse ─
+# Reviewer finding (post-v0.1.15): "100% CRR means the memory items
+# remain, but important words like 'not' or 'less than' could still
+# be lost." All six confirmed by scripts/repro_polarity_bug.py on
+# v0.1.15: the trim ladder scored negations and comparators as filler
+# (10), so "dashboard must load in under 2 seconds" trimmed to
+# "dashboard 2 seconds", "Payments must not be stored in plaintext"
+# lost "not" at the 2-word floor (meaning INVERTED), and (b2)
+# collapsed "retention must not exceed 5 years" (upper) with
+# "retention at least 5 years" (lower) — one bound silently deleted.
+
+def test_negation_survives_starvation_trim():
+    """v0.1.16: 'not' must survive a 3-word trim together with the word
+    it negates — 'Payments must not' bans nothing, and 'Payments
+    stored' bans the opposite of the constraint."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "Payments must not be stored in plaintext", 3)
+    assert "not" in result.lower(), f"negation lost: {result!r}"
+    assert "stored" in result.lower() or "plaintext" in result.lower(), \
+        f"negated word lost, negation is noise: {result!r}"
+
+
+def test_negation_binds_at_two_word_floor():
+    """v0.1.16: at the 2-word floor the negation binds to its verb —
+    'never stored' — instead of losing 'never' entirely (v0.1.15 gave
+    'Cards must', inverting the constraint)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "Cards must never be stored unencrypted", 2)
+    assert "never" in result.lower(), f"negation lost at floor: {result!r}"
+    assert "stored" in result.lower(), f"negated word lost: {result!r}"
+
+
+def test_comparator_less_than_survives_trim():
+    """v0.1.16: 'less than' binds to its number — 'latency 100
+    milliseconds' from 'latency less than 100 milliseconds' is a
+    different constraint (upper bound became an exact value)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "latency less than 100 milliseconds", 3)
+    assert "less than" in result.lower(), f"comparator lost: {result!r}"
+    assert "100" in result, f"value lost: {result!r}"
+
+
+def test_comparator_under_survives_trim():
+    """v0.1.16: 'under 2 seconds' is one atomic span — 'dashboard 2
+    seconds' reads as 'loads IN 2 seconds', not 'under'."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "dashboard must load in under 2 seconds", 3)
+    assert "under" in result.lower(), f"comparator lost: {result!r}"
+    assert "2" in result and "second" in result.lower(), \
+        f"value/unit lost: {result!r}"
+
+
+def test_comparator_degrades_gracefully():
+    """v0.1.16: when the full span cannot fit, a comparator span
+    degrades to comparator+number (direction outranks the unit) —
+    never to a bare number with its direction silently gone."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "dashboard must load in under 2 seconds", 2)
+    assert "under" in result.lower() and "2" in result, \
+        f"comparator dropped entirely at 2 words: {result!r}"
+
+
+def test_no_more_than_span_survives():
+    """v0.1.16: 'no more than 3' is one span. v0.1.15 produced the
+    garbled 'no more 3 retries' ('than' was filler)."""
+    from dspm.engine import DSPMEngine
+    engine = DSPMEngine()
+    result = engine._trim_numeric_first(
+        "allow no more than 3 retries", 4)
+    assert "no more than" in result.lower() and "3" in result, \
+        f"'no more than' span broken: {result!r}"
+
+
+def test_bound_class_classification():
+    """v0.1.16 unit test: _bound_class reads bound direction correctly,
+    including 'not exceed' (upper) vs bare 'exceed' (lower)."""
+    from dspm.memory import _bound_class
+    assert _bound_class("retention must not exceed 5 years") == "upper"
+    assert _bound_class("retention no more than 5 years") == "upper"
+    assert _bound_class("retention at least 5 years") == "lower"
+    assert _bound_class("latency must exceed 100 ms") == "lower"
+    assert _bound_class("retention exactly 5 years") == "exact"
+    assert _bound_class("retention 5 years") == "plain"
+    assert _bound_class("must not be stored") == "neg"
+
+
+def test_contradictory_bounds_not_collapsed():
+    """v0.1.16: an upper bound and a lower bound on the same slot, same
+    number, same unit are DIFFERENT constraints — v0.1.15's (b2)
+    collapsed them into one critical, silently deleting a bound."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Audit retention must not exceed 5 years', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Audit retention at least 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, \
+        f"contradictory bounds collapsed (v0.1.16 fix): {crits}"
+    assert any('exceed' in c.lower() for c in crits)
+    assert any('least' in c.lower() for c in crits)
+
+
+def test_same_direction_bounds_still_collapse():
+    """v0.1.16 guard: restatements with the SAME bound direction still
+    collapse — 'no more than 5 years' and 'must not exceed 5 years'
+    are the same fact."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Audit retention no more than 5 years', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Audit retention must not exceed 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"same-direction bounds should collapse: {crits}"
+    assert '5' in crits[0]
+
+
+def test_polarity_words_survive_end_to_end():
+    """v0.1.16 end-to-end: at a starvation budget the compressed
+    context keeps 'not', 'under', and 'less than' — CRR was already
+    100 on v0.1.15, but the MEANING was not."""
+    m = DSPMMemory(budget=40)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Dashboard must load in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'constraint',
+                                 'Payments must not be stored in plaintext', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'constraint',
+                                 'Latency less than 100 milliseconds', []))
+    m._merge_patch(SemanticPatch('p3_0', 3, 'constraint',
+                                 'Rate limit 100 requests per minute', []))
+    ctx = m.get_context(query='hard requirements')
+    assert 'not' in ctx.lower(), f"negation lost end-to-end: {ctx!r}"
+    assert 'under' in ctx.lower(), f"comparator lost end-to-end: {ctx!r}"
+    assert 'less than' in ctx.lower(), f"comparator lost end-to-end: {ctx!r}"
+    assert m.stats['crr'] == 100
+
+
+def test_crr_reports_zero_when_budget_excludes_all_criticals():
+    m = DSPMMemory(budget=4)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint', 'Must NOT use Redis', []))
+    assert m.stats['crr'] == 100
+    ctx = m.get_context(query='redis')
+    assert ctx == ''
+    assert m.stats['crr'] == 0
+
+
+def test_reset_resets_crr_contract():
+    m = DSPMMemory(budget=4)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint', 'Must NOT use Redis', []))
+    m.get_context(query='redis')
+    assert m.stats['crr'] == 0
+    m.reset()
+    m._merge_patch(SemanticPatch('p1_0', 0, 'constraint', 'Use Postgres', []))
+    assert m.stats['crr'] == 100
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 review-fix regressions: role threading, stats delivery flag,
+# and the bake cap for supersession chains deeper than two.
+# ---------------------------------------------------------------------------
+
+def _mk_crit(pid, payload, turn):
+    """Manual critical patch mirroring the MockLLMClient JSON field set."""
+    return SemanticPatch(
+        patch_id=pid, turn_index=turn, patch_type="constraint",
+        payload=payload, dependencies=[], utility=0.9,
+        fingerprint="", slot_key="", is_delta=False, delta_base="",
+        causal_depth=0)
+
+
+def test_role_threaded_into_extractor_prompt():
+    llm = PromptCapturingClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    mem.add_turn('assistant', 'I will always return JSON output.')
+    assert '[assistant]' in llm.user_messages[0], llm.user_messages[0]
+
+
+def test_role_defaults_to_user_when_extracting_directly():
+    from dspm.extractor import extract_turn
+    llm = KwargCapturingClient()
+    extract_turn(llm, 'test-model', 'Always return JSON.', 0)
+    assert '[user]' in llm.calls[0]["messages"][1]["content"]
+
+
+def test_stats_exposes_delivery_flag_and_selected_count():
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    mem.add_turn('user', 'Return JSON and use POST /v1/items for creation.')
+    s = mem.stats
+    assert s["context_built"] is False
+    assert s["selected"] == s["total_patches"]      # pre-build: store size
+    mem.get_context(query="overview")
+    s2 = mem.stats
+    assert s2["context_built"] is True
+    assert s2["selected"] <= s2["total_patches"]    # post-build: delivered
+
+
+def test_single_revision_bakes_three_superseded_values():
+    mem = DSPMMemory(budget=400)
+    mem._merge_patch(_mk_crit("c0", "webhook timeout 30 seconds", 0))
+    mem._merge_patch(_mk_crit("c1", "webhook timeout 20 seconds", 1))
+    mem._merge_patch(_mk_crit("c2", "webhook timeout 15 seconds", 2))
+    rev = _mk_crit("c3", "webhook timeout updated to 10 seconds", 3)
+    mem._merge_patch(rev)
+    assert "(was" in rev.payload, rev.payload
+    for old_val in ("30", "20", "15"):
+        assert old_val in rev.payload, rev.payload   # v0.1.16 lost the 15
+    assert len([p for p in mem.all_patches if p.is_critical]) == 1
+
+
+def test_extractor_remaps_forward_dependency_references():
+    from dspm.extractor import extract_turn
+    content = json.dumps([
+        {"patch_id": "child", "patch_type": "decision",
+         "payload": "Deploy after approval", "dependencies": ["parent"]},
+        {"patch_id": "parent", "patch_type": "constraint",
+         "payload": "Approval is required", "dependencies": []},
+    ])
+    patches = extract_turn(KwargCapturingClient(content), 'test-model',
+                           'Approval is required, then deploy.', 5)
+    assert [p.patch_id for p in patches] == ["p5_0", "p5_1"]
+    assert patches[0].dependencies == ["p5_1"]
+
+
+def test_unit_aliases_distinguish_milliseconds_from_seconds():
+    from dspm.memory import _units_in
+    assert _units_in("webhook timeout 100 ms") == frozenset({"ms"})
+    assert _units_in("webhook timeout 100 s") == frozenset({"second"})
+    assert _units_in("timeout 30 s") == _units_in("timeout 30 seconds")
+
+
+def test_cant_is_recognized_as_negative_polarity():
+    from dspm.memory import _bound_class
+    assert _bound_class("retention can't exceed 5 years") == "upper"
+    assert _bound_class("retention at least 5 years") == "lower"
+
+
+def test_baked_revision_recounts_token_cost():
+    from dspm.patch import count_tokens
+    mem = DSPMMemory(budget=400)
+    mem._merge_patch(_mk_crit("c0", "webhook timeout 30 seconds", 0))
+    mem._merge_patch(_mk_crit("c1", "webhook timeout 20 seconds", 1))
+    rev = _mk_crit("c2", "webhook timeout updated to 10 seconds", 2)
+    mem._merge_patch(rev)
+    assert rev.token_cost == count_tokens(rev.to_prompt_str())
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 finding S1 (live conversation smoke): cross-type CON<->DEC
+# restatements collapsed; "sub-" reads as an upper bound; units scan
+# hyphenated tokens. Live evidence (DIAG dump): 'Maximum fee per
+# transaction is limited to 0.5%' [CON] + 'fee cap set to 0.5% as tracked'
+# [DEC], and 'dashboard must load in under 2 seconds' [DEC] +
+# 'Dashboard latency must be sub-2-second' [CON], coexisted as duplicate
+# criticals; the store bloated to 8-10 and CRR fell to 70-87% at the
+# smoke's 59-token budget.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_type_dashboard_restatement_collapses():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 6, 'decision',
+                                 'dashboard must load in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 7, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"cross-type dashboard restatement should collapse: {crits}"
+
+
+def test_cross_type_retention_restatement_collapses():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'Audit retention set to 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Audit logs stored for exactly 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"cross-type retention restatement should collapse: {crits}"
+
+
+def test_cross_type_thin_shared_fee_pair_collapses():
+    """v0.1.17 finding S2 unfreezes this pair. The 20-run live loop kept
+    failing CRR at 87% (7/8 delivered) on 30% of runs: this frozen fee
+    pair held the nominal store at 6 against the smoke's 7-critical
+    delivery cap, so two extraction variants tipped a run to 8. Rule
+    (b4) bridges it -- bound-word slot head ('Maximum ...') agreeing
+    with its own direction, shared subject noun as the other slot head,
+    within two turns. The tier danger the freeze guarded against is now
+    separately frozen by test_bound_head_bridge_keeps_tier_scoped_fees
+    and test_bound_head_bridge_keeps_gold_silver_tiers."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    assert len(m.critical_patches) == 1, \
+        f"bound-head bridge should collapse the fee echo: {[p.payload for p in m.critical_patches]}"
+
+
+def test_cross_type_contradictory_bounds_not_collapsed():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'Audit retention must not exceed 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Audit retention at least 5 years', []))
+    assert len(m.critical_patches) == 2, \
+        f"contradictory cross-type bounds merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_cross_type_same_subject_pages_not_collapsed():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Dashboard loads in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Homepage loads in under 2 seconds', []))
+    assert len(m.critical_patches) == 2, \
+        f"different subjects merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_cross_type_plain_values_not_collapsed():
+    """Both-plain guard: no directional/exact bound, one shared word --
+    'Budget 100 for cloud' vs 'Budget 100 for training' must stay apart."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Budget 100 for cloud', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Budget 100 for training', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_cross_type_revision_supersedes_unchanged():
+    """(b3) must not disturb (c): a real cross-type revision with changed
+    numbers still supersedes and bakes history."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Updated webhook timeout changed to 10 seconds instead', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, crits
+    assert '(was' in crits[0] and '30' in crits[0], crits
+
+
+def test_sub_prefix_reads_as_upper_bound():
+    from dspm.memory import _bound_class
+    assert _bound_class("Dashboard latency must be sub-2-second") == "upper"
+    # sanity: prior vocabulary unchanged
+    assert _bound_class("retention must not exceed 5 years") == "upper"
+    assert _bound_class("retention exactly 5 years") == "exact"
+
+
+def test_units_scan_hyphenated_tokens():
+    from dspm.memory import _units_in
+    assert _units_in("Dashboard latency must be sub-2-second") == frozenset({"second"})
+    assert _units_in("24-hour window") == frozenset({"hour"})
+    # sanity: plain tokens unchanged
+    assert _units_in("timeout 30 seconds") == frozenset({"second"})
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 finding S2 (20-run live loop: 6/20 runs at CRR 87% = 7/8) plus
+# the external review's actionable points. (b4) bridges thin cross-type
+# echoes via a bound-word slot head; the bake stops telling a value
+# twice; source_role and the three-way token split answer review points
+# 2 and 4. CRR-on-empty-selection (review point 1) was fixed in the F2
+# batch and is already pinned above.
+# ---------------------------------------------------------------------------
+
+
+def test_fee_cap_bridge_symmetric_direction():
+    """The bridge is direction-agnostic: DEC first, CON echo second."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    assert len(m.critical_patches) == 1, \
+        f"symmetric fee echo should collapse: {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_canary_scope_noun_merges():
+    """KNOWN LIMITATION, frozen deliberately (review point 3): word overlap
+    cannot tell 'Max users 500 per org' from 'org admins cap 500' -- same
+    value, same direction, shared scope noun 'org', bound-word head 'max'.
+    (b4) merges this pair. The structured slot supersession planned for
+    the next batch is the fix; when it lands, this canary is the test to flip."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Max users 500 per org', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'org admins cap 500', []))
+    assert len(m.critical_patches) == 1, \
+        f"canary: (b4) merges scope-noun pairs (documented): {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_keeps_tier_scoped_fees():
+    """The case the old freeze protected: bound-word head, but the other
+    side's head ('silver') is NOT the shared subject noun -- the pair
+    shares only 'fee' and the qualifiers differ. Must stay apart."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum platinum fee is 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'silver tier fee cap 0.5%', []))
+    assert len(m.critical_patches) == 2, \
+        f"tier-scoped fees merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_bound_head_bridge_keeps_gold_silver_tiers():
+    """No bound-word head on either side -> no bridge, regardless of the
+    identical value and direction."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Gold tier fee capped at 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Silver tier fee capped at 0.5%', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_requires_echo_proximity():
+    """Beyond two turns the bridge closes: extraction echoes are adjacent;
+    distant restatements with thin overlap are not worth the risk."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 5, 'decision',
+                                 'fee cap set to 0.5% as tracked', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_keeps_different_values():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee per transaction is limited to 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee cap set to 1% as tracked', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_bound_head_bridge_keeps_contradictory_bounds():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Maximum fee 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'fee floor 0.5%', []))
+    assert len(m.critical_patches) == 2, \
+        f"contradictory bounds merged: {[p.payload for p in m.critical_patches]}"
+
+
+def test_no_more_than_head_direction_mismatch_stays():
+    """'No more than 500 records per page' IS an upper bound, but its
+    slot head 'more' is a LOWER-bound word inside an upper-bound
+    sentence -- the head-direction agreement requirement exists exactly
+    so negated bounds never bridge. Same fact, kept apart: conservative
+    is correct for a rule this deep in the risk curve."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'No more than 500 records per page', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'page size capped at 500', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_source_role_rides_on_add_turn():
+    """Review point 2, storage half: the F2 batch threaded the role into
+    the extractor prompt; it must also ride on the extracted patches."""
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    patches = mem.add_turn('assistant', 'I will always return JSON output.')
+    assert patches, "extraction returned no patches"
+    assert all(p.source_role == 'assistant' for p in patches), \
+        [p.source_role for p in patches]
+
+
+def test_render_source_roles_flag():
+    """Role attribution renders only when asked for -- it costs tokens."""
+    m = DSPMMemory(budget=250)
+    p = SemanticPatch('r0', 0, 'constraint', 'fee cap set to 0.5% as tracked', [])
+    p.source_role = 'user'
+    m._merge_patch(p)
+    assert '(user)' not in m.get_context('fee')       # off by default
+    m2 = DSPMMemory(budget=250, render_source_roles=True)
+    p2 = SemanticPatch('r1', 0, 'constraint', 'fee cap set to 0.5% as tracked', [])
+    p2.source_role = 'user'
+    m2._merge_patch(p2)
+    assert '(user)' in m2.get_context('fee')
+
+
+def test_stats_reports_critical_roles():
+    m = DSPMMemory(budget=250)
+    p = SemanticPatch('a0', 0, 'constraint', 'PCI-DSS compliance required', [])
+    p.source_role = 'user'
+    m._merge_patch(p)
+    d = SemanticPatch('a1', 1, 'decision', 'dashboard loads in under 2 seconds', [])
+    d.source_role = 'assistant'
+    m._merge_patch(d)
+    assert m.stats['critical_by_role'] == {'user': 1, 'assistant': 1}
+
+
+def test_stats_separates_conversation_patch_context_tokens():
+    """Review point 4: conversation_tokens counts the RAW turn text fed
+    to add_turn; patch_tokens (alias raw_tokens) counts the extracted
+    patches; context_tokens counts the delivery."""
+    from dspm.patch import count_tokens
+    llm = MockLLMClient()
+    mem = DSPMMemory(llm_client=llm, model='test-model', budget=250)
+    t1 = 'Return JSON and use POST /v1/items for creation.'
+    t2 = 'All API responses must include a request id header.'
+    mem.add_turn('user', t1)
+    mem.add_turn('assistant', t2)
+    s = mem.stats
+    assert s['conversation_tokens'] == count_tokens(t1) + count_tokens(t2), s
+    assert s['patch_tokens'] == s['raw_tokens'] > 0
+    mem.get_context('json')
+    s2 = mem.stats
+    assert s2['context_tokens'] > 0
+    assert s2['patch_tokens'] >= s2['context_tokens'], s2
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 20-run live gate (F6): two live-extraction failure modes the
+# offline suites could not produce. Mode 1 (runs 9/11/20, CRR 87%): the
+# same dashboard latency fact arrived as 'Dashboard sub-2-second' [CON]
+# and 'sub-2-second dashboard' [DEC] -- a word-order reversal whose
+# shared digit-bearing compound the (b3) non-numeric word count
+# excluded, so the pair never collapsed and the store bloated to 8
+# against the 7-critical delivery cap. Rule (b5) bridges it. Mode 2
+# (run 19): a comma-form revision ('... 10 seconds, was 30 seconds')
+# fell to the 2-word floor -- no '(was' marker -- and the 2-word
+# allowance delivered '[DEC] 10 seconds,' with the replaced value
+# gone. The comma form now floors at 3 and the minimal story
+# normalizes to '10 (was 30)'.
+# ---------------------------------------------------------------------------
+
+
+def test_compound_token_bridge_collapses_reversed_pair():
+    """Live run-9 shape: the DEC echo leads with the value compound, the
+    CON leads with the subject noun -- heads in reversed order, and the
+    pair shares only ONE non-numeric word, below (b3)'s >=2 guard."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 7, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 8, 'decision',
+                                 'sub-2-second dashboard confirmed', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"reversed dashboard echo should collapse: {crits}"
+
+
+def test_compound_token_bridge_symmetric_direction():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'sub-2-second dashboard confirmed', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    assert len(m.critical_patches) == 1, \
+        f"symmetric reversed echo should collapse: {[p.payload for p in m.critical_patches]}"
+
+
+def test_compound_token_bridge_keeps_different_values():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'sub-3-second dashboard confirmed', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_compound_token_bridge_keeps_different_units():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'sub-2-minute dashboard confirmed', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_compound_token_bridge_requires_echo_proximity():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 5, 'decision',
+                                 'sub-2-second dashboard confirmed', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_word_floor_covers_comma_form_history():
+    """Run 19's root cause: a comma-form revision carried no '(was'
+    marker, floored at 2, and the 2-word allowance lost the replaced
+    value entirely."""
+    from dspm.engine import DSPMEngine
+    eng = DSPMEngine(budget=59)
+    assert eng._word_floor('webhook timeout updated to 10 seconds (was 30)') == 3
+    assert eng._word_floor(
+        'webhook timeout updated to 10 seconds, was 30 seconds') == 3
+    assert eng._word_floor(
+        'webhook timeout updated to 10 seconds, previously 30 seconds') == 3
+    assert eng._word_floor('dashboard latency must be sub-2-second') == 2
+    assert eng._word_floor('webhook timeout was updated to 10 seconds') == 2
+
+
+def test_comma_form_revision_trims_to_canonical_story():
+    from dspm.engine import DSPMEngine
+    eng = DSPMEngine(budget=59)
+    out = eng._trim_numeric_first(
+        'webhook timeout updated to 10 seconds, was 30 seconds', 3)
+    assert out == '10 (was 30)', out
+    out2 = eng._trim_numeric_first(
+        'webhook timeout updated to 10 seconds, previously 30 seconds', 3)
+    assert out2 == '10 (was 30)', out2
+    # the classic paren form keeps its story
+    out3 = eng._trim_numeric_first(
+        'webhook timeout updated to 10 seconds (was 30)', 3)
+    assert out3 == '10 (was 30)', out3
+
+
+def test_starved_store_keeps_both_revision_values_comma_form():
+    """Store-level replay of live run 19: budget 59, seven criticals
+    after the merges, the revision in comma form. The delivered context
+    must keep BOTH the current value and the replaced one."""
+    m = DSPMMemory(budget=59)
+    rows = [
+        ('r0', 0, 'constraint',
+         'All payments must be PCI-DSS compliant as a non-negotiable requirement'),
+        ('r1', 0, 'constraint', 'Maximum fee per transaction is limited to 0.5%'),
+        ('r2', 1, 'decision', 'fee cap set to 0.5% as tracked'),
+        ('r3', 5, 'decision',
+         'webhook timeout updated to 10 seconds, was 30 seconds'),
+        ('r4', 6, 'decision', 'dashboard must load in under 2 seconds'),
+        ('r5', 7, 'decision', 'Audit retention set to 5 years'),
+        ('r6', 7, 'constraint', 'Dashboard latency must be sub-2-second'),
+        ('r7', 8, 'decision', 'homepage response under 2 seconds'),
+        ('r8', 9, 'decision', 'PCI compliance tracked'),
+    ]
+    for pid, turn, t, pl in rows:
+        m._merge_patch(SemanticPatch(pid, turn, t, pl, []))
+    ctx = m.get_context('webhook timeout')
+    assert '10' in ctx, ctx
+    assert '30' in ctx, ctx
+    s = m.stats
+    assert s['crr'] == 100, s
+
+
+# ---------------------------------------------------------------------------
+# v0.1.17 20-run live gate, round 2 (F7): 6/20 runs failed CRR at
+# 87/77/70 -- two live-extraction echo signatures no offline suite
+# could produce. (i) The audit retention fact arrived twice -- noun
+# first ('Audit retention set to 5 years', head 'audit') and verb
+# first ('Retain audit logs for exactly 5 years', head 'retain') --
+# and survived as TWO decisions in 6/6 failing runs ('[DEC] 5 years'
+# + '[DEC] exactly 5'); (b2) requires equal heads, (b) needs >=4
+# shared words, so nothing collapsed it. (ii) Dashboard echoes led
+# with confirmation verbs ('Confirmed sub-2-second dashboard' -- head
+# 'confirmed' absent from the other payload), so (b5)'s
+# bidirectional head containment failed while every other condition
+# passed. Rule (b6) bridges same- and cross-type echoes by what the
+# pair SHARES: subject noun + identical value/unit/bound safety +
+# a residue guard that keeps scoped facts apart. The payloads below
+# are pinned to the observed run-4/5/8 ctx lines by the trim
+# assertions (the failing runs starved every line to the 2-word
+# floor: '[DEC] exactly 5', '[DEC] 5 years', '[CON] Dashboard
+# sub-2-second', '[DEC] sub-2-second dashboard', '[DEC] under 2').
+# ---------------------------------------------------------------------------
+
+
+def test_shared_subject_retention_echo_collapses():
+    """Live runs 4/5/8/10/12/15/17 (every FAIL) delivered BOTH
+    '[DEC] 5 years' and '[DEC] exactly 5' -- the audit retention fact
+    extracted twice. The trim assertions pin the stored payloads to
+    those exact ctx lines."""
+    from dspm.engine import DSPMEngine
+    eng = DSPMEngine(budget=59)
+    assert eng._trim_numeric_first(
+        'Audit retention set to 5 years', 2) == '5 years'
+    assert eng._trim_numeric_first(
+        'Retain audit logs for exactly 5 years', 2) == 'exactly 5'
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 7, 'decision',
+                                 'Audit retention set to 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 7, 'decision',
+                                 'Retain audit logs for exactly 5 years', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, \
+        f"verb-first retention echo should collapse: {crits}"
+
+
+def test_shared_subject_retention_echo_symmetric():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 7, 'decision',
+                                 'Retain audit logs for exactly 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 7, 'decision',
+                                 'Audit retention set to 5 years', []))
+    assert len(m.critical_patches) == 1, \
+        f"symmetric retention echo should collapse: " \
+        f"{[p.payload for p in m.critical_patches]}"
+
+
+def test_shared_subject_dashboard_echo_dirty_heads_collapses():
+    """Run 5's delivered pair: '[CON] Dashboard sub-2-second' +
+    '[DEC] sub-2-second dashboard' -- BOTH live payloads led with a
+    confirmation verb, so (b5)'s bidirectional slot-head containment
+    failed in both directions ('keep' and 'confirmed' each absent
+    from the other payload) while every other (b5) condition
+    passed."""
+    from dspm.engine import DSPMEngine
+    eng = DSPMEngine(budget=59)
+    assert eng._trim_numeric_first(
+        'Keep Dashboard latency sub-2-second', 2) == 'Dashboard sub-2-second'
+    assert eng._trim_numeric_first(
+        'Confirmed sub-2-second dashboard', 2) == 'sub-2-second dashboard'
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 7, 'constraint',
+                                 'Keep Dashboard latency sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 8, 'decision',
+                                 'Confirmed sub-2-second dashboard', []))
+    assert len(m.critical_patches) == 1, \
+        f"double-dirty-head dashboard echo should collapse: " \
+        f"{[p.payload for p in m.critical_patches]}"
+
+
+def test_shared_subject_dashboard_echo_one_dirty_head_collapses():
+    """The single-dirty-head variant: the constraint keeps its clean
+    'dashboard' head, the echo still leads with 'confirmed'."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 7, 'constraint',
+                                 'Dashboard latency must be sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 8, 'decision',
+                                 'Confirmed sub-2-second dashboard', []))
+    assert len(m.critical_patches) == 1, \
+        f"one-dirty-head dashboard echo should collapse: " \
+        f"{[p.payload for p in m.critical_patches]}"
+
+
+def test_same_type_dashboard_echo_under2_collapses():
+    """Run 8's shape (signature B run, no dashboard pair visible in
+    ctx): the delivered line was '[DEC] under 2' (the t6 requirement)
+    and the evicted 8th critical was its same-type echo -- (b2)
+    needs equal heads ('dashboard' vs 'sub'), (b) needs >=4 shared
+    words, so both stayed and the store read 8."""
+    from dspm.engine import DSPMEngine
+    eng = DSPMEngine(budget=59)
+    assert eng._trim_numeric_first(
+        'dashboard must load in under 2 seconds', 2) == 'under 2'
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 6, 'decision',
+                                 'dashboard must load in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 7, 'decision',
+                                 'sub-2-second dashboard confirmed', []))
+    assert len(m.critical_patches) == 1, \
+        f"same-type under-2 echo should collapse: " \
+        f"{[p.payload for p in m.critical_patches]}"
+
+
+def test_run5_store_replay_collapses_all_echoes():
+    """Store-level replay of the CRR 77% run: six facts + the
+    retention echo + two head-dirty dashboard echoes. Pre-F7 the
+    store bloats to 9 and the delivered ctx shows the duplicate
+    lines; post-F7 every echo collapses, the store reads 6 and CRR
+    is 100 at the smoke's budget."""
+    m = DSPMMemory(budget=59)
+    rows = [
+        ('r0', 0, 'constraint',
+         'All payments must be PCI-DSS compliant as a non-negotiable requirement'),
+        ('r1', 0, 'constraint', 'Maximum fee per transaction is limited to 0.5%'),
+        ('r2', 1, 'decision', 'fee cap set to 0.5% as tracked'),
+        ('r3', 3, 'decision', 'automatic retries on failure enabled'),
+        ('r4', 5, 'decision',
+         'Webhook timeout updated to 10 seconds, superseding the previous 30 seconds value (was 30)'),
+        ('r5', 6, 'constraint', 'dashboard load time must be under 2 seconds'),
+        ('r6', 7, 'decision', 'Audit retention set to 5 years'),
+        ('r7', 7, 'decision', 'Retain audit logs for exactly 5 years'),
+        ('r8', 7, 'constraint', 'Keep Dashboard latency sub-2-second'),
+        ('r9', 7, 'decision', 'Confirmed sub-2-second dashboard'),
+    ]
+    for pid, turn, t, pl in rows:
+        m._merge_patch(SemanticPatch(pid, turn, t, pl, []))
+    ctx = m.get_context('webhook timeout')
+    s = m.stats
+    assert s['critical_total'] == 6, s
+    assert s['crr'] == 100, s
+    assert sum('sub-2-second' in l for l in ctx.splitlines()) == 1, ctx
+    assert 'under 2' not in ctx, ctx
+    retention = [l for l in ctx.splitlines()
+                 if ('exactly' in l or 'retention' in l
+                     or 'audit' in l or 'years' in l)]
+    assert len(retention) == 1, ctx
+
+
+def test_run8_store_replay_collapses_all_echoes():
+    """Store-level replay of the CRR 87% run 8: six facts with the
+    dashboard requirement as a t6 decision ('[DEC] under 2' was the
+    delivered line), plus the retention echo and the same-type
+    dashboard echo -- the evicted 8th critical. Post-F7 the store
+    reads 6 and CRR is 100."""
+    m = DSPMMemory(budget=59)
+    rows = [
+        ('r0', 0, 'constraint',
+         'All payments must be PCI-DSS compliant as a non-negotiable requirement'),
+        ('r1', 0, 'constraint', 'Maximum fee per transaction is limited to 0.5%'),
+        ('r2', 1, 'decision', 'fee cap set to 0.5% as tracked'),
+        ('r3', 3, 'decision', 'automatic retries on failure enabled'),
+        ('r4', 5, 'decision',
+         'Webhook timeout updated to 10 seconds, superseding the previous 30 seconds value (was 30)'),
+        ('r5', 6, 'decision', 'dashboard must load in under 2 seconds'),
+        ('r6', 7, 'decision', 'Audit retention set to 5 years'),
+        ('r7', 7, 'decision', 'Retain audit logs for exactly 5 years'),
+        ('r8', 7, 'decision', 'sub-2-second dashboard confirmed'),
+    ]
+    for pid, turn, t, pl in rows:
+        m._merge_patch(SemanticPatch(pid, turn, t, pl, []))
+    ctx = m.get_context('webhook timeout')
+    s = m.stats
+    assert s['critical_total'] == 6, s
+    assert s['crr'] == 100, s
+    assert 'under 2' not in ctx, ctx
+    assert sum('sub-2-second' in l for l in ctx.splitlines()) == 1, ctx
+
+
+def test_shared_subject_bridge_keeps_scoped_budgets():
+    """Scope nouns stay scopes: 'Cloud' before the shared subject and
+    'for training' after it (a preposition blocks the
+    property-position tolerance -- 'for <scope>' is never a
+    property)."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                  'Cloud budget cap 100', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'budget cap 100 for training', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_keeps_scoped_dashboards():
+    """Same value, same subject, different audiences: a scope noun
+    BEFORE the shared subject ('Guest dashboard...', 'Admin
+    dashboard...') is still a scope -- the residue guard rejects it
+    by position. (The 'for admins/for guests' shape with a bound-word
+    echo head is the FROZEN (b4) canary behavior and merges -- that
+    limitation predates F7.)"""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                  'Guest dashboard sub-2-second', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                  'Admin dashboard sub-2-second', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_keeps_platinum_silver_fees():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                  'Maximum platinum fee is 0.5%', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'silver tier fee cap 0.5%', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_keeps_dashboard_homepage():
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                  'Dashboard loads in under 2 seconds', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Homepage loads in under 2 seconds', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_keeps_retention_vs_periodic_review():
+    """Storing for 5 years vs reviewing every 5 years: same subject,
+    same value -- different facts. Blocked by the plain/plain gate
+    ('every' is not a bound word)."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                 'Audit retention set to 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                 'Review audit logs every 5 years', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_requires_shared_subject_noun():
+    """Property nouns never anchor the bridge: 'logs' is shared but is
+    a _PROPERTY_NOUN (like 'time'/'latency'/'response'), so this pair
+    has NO shared subject and stays two facts. (The closer pair
+    'Retain audit logs for exactly 5 years' + 'Retain payment logs
+    for exactly 5 years' already merges today via rule (b)'s >=4
+    shared words -- pre-existing, canary-frozen behavior.)"""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                  'Audit logs retained 5 years', []))
+    m._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                  'Retain payment logs for exactly 5 years', []))
+    assert len(m.critical_patches) == 2
+
+
+def test_shared_subject_bridge_edge_guards():
+    m1 = DSPMMemory(budget=250)
+    m1._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                  'Audit retention set to 5 years', []))
+    m1._merge_patch(SemanticPatch('s1', 5, 'decision',
+                                  'Retain audit logs for exactly 5 years', []))
+    assert len(m1.critical_patches) == 2, "beyond two turns must stay"
+    m2 = DSPMMemory(budget=250)
+    m2._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                  'Retain audit logs for exactly 5 years', []))
+    m2._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                  'Retain audit logs for exactly 3 years', []))
+    assert len(m2.critical_patches) == 2, "different values must stay"
+    m3 = DSPMMemory(budget=250)
+    m3._merge_patch(SemanticPatch('s0', 0, 'decision',
+                                  'Retain audit logs for exactly 5 years', []))
+    m3._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                  'Retain audit logs for exactly 5 months', []))
+    assert len(m3.critical_patches) == 2, "different units must stay"
+    m4 = DSPMMemory(budget=250)
+    m4._merge_patch(SemanticPatch('s0', 0, 'constraint',
+                                  'Keep Dashboard latency sub-2-second', []))
+    m4._merge_patch(SemanticPatch('s1', 1, 'decision',
+                                  'Confirmed sub-2-minute dashboard', []))
+    assert len(m4.critical_patches) == 2, "unit mismatch inside the compound"
