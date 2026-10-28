@@ -206,6 +206,16 @@ def _slot_head(text: str) -> str:
     return ""
 
 
+def _head_anchored(new_head: str, old_head: str,
+                   new_words: set, old_words: set) -> bool:
+    """Issue #2: True when one payload's slot head appears among the other
+    payload's content words (the topic word is not first in both)."""
+    for head, words in ((new_head, old_words), (old_head, new_words)):
+        if head and head not in _UNIT_ALIASES and head in words:
+            return True
+    return False
+
+
 # v0.1.15: extract time/size units from ALL words in the payload.
 # v1.0 version only checked words IMMEDIATELY after numbers — missed "100
 # requests per minute" (the unit is 3 words away from the number), so
@@ -847,13 +857,13 @@ class DSPMMemory:
                     # plus every (b3)/(b4) safety: identical
                     # numbers, identical units, compatible bounds,
                     # never plain/plain, <=2 turns.
-                    old_words = set(re.findall(r"\w+", existing.payload.lower()))
-                    new_words = set(re.findall(r"\w+", patch.payload.lower()))
-                    if (len(old_words & new_words) >= 2
-                            and any(re.search(r"\d", w) for w in old_words & new_words)
+                    old_raw = set(re.findall(r"\w+", existing.payload.lower()))
+                    new_raw = set(re.findall(r"\w+", patch.payload.lower()))
+                    if (len(old_raw & new_raw) >= 2
+                            and any(re.search(r"\d", w) for w in old_raw & new_raw)
                             and new_nums == _numbers(existing.payload)
-                            and old_head and old_head in new_words
-                            and new_head and new_head in old_words
+                            and old_head and old_head in new_raw
+                            and new_head and new_head in old_raw
                             and _units_in(patch.payload) == _units_in(existing.payload)
                             and _polarity_compatible(bc_new, bc_old)
                             and not (bc_new == "plain" and bc_old == "plain")
@@ -872,6 +882,20 @@ class DSPMMemory:
                         stale.append(existing)          # (b6) shared-subject echo bridge
                         continue
 
+                # Issue #2 (a3): revision whose topic word is not the FIRST word of
+                # both payloads ('Cache TTL must be 60 seconds' vs 'TTL is now 120
+                # seconds'). Needs a revision marker, differing numbers on both sides,
+                # the same non-empty unit set, and one slot head found in the other
+                # payload. Any type pair.
+                if (marker and new_nums and _numbers(existing.payload)
+                        and new_nums != _numbers(existing.payload)
+                        and _units_in(patch.payload)
+                        and _units_in(patch.payload) == _units_in(existing.payload)
+                        and _head_anchored(new_head, _slot_head(existing.payload),
+                                           _content_words(patch.payload),
+                                           _content_words(existing.payload))):
+                    stale.append(existing)          # (a3) revision, head anchored elsewhere
+                    continue
         # bake replaced values into the surviving payload
         if stale and patch.is_critical:
             patch_base = re.sub(r"\(was [^)]+\)", "", patch.payload)
