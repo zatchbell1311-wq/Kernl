@@ -109,7 +109,7 @@ from typing import Any, Dict, List, Optional
 
 from dspm.config import DEFAULT_BUDGET, DENSE_AUTO_THRESHOLD, LLM_STRICT_DEFAULT
 from dspm.engine import DSPMEngine
-from dspm.extractor import extract_turn, numeric_density
+from dspm.extractor import extract_turn, numeric_density, async_extract_turn
 from dspm.patch import SemanticPatch, count_tokens
 from dspm.persistence import save_memory, load_memory
 
@@ -204,6 +204,32 @@ def _slot_head(text: str) -> str:
         if len(w) >= 3 and w not in _STOPWORDS and w not in _REVISION_MARKERS:
             return _normalize(w)
     return ""
+
+
+def _head_anchored(new_head: str, old_head: str,
+                   new_words: set, old_words: set,
+                   new_payload: str = "", old_payload: str = "") -> bool:
+    """Issue #2: True when one payload's slot head appears among the other
+    payload's content words (the topic word is not first in both), OR when
+    both payloads share an all-caps acronym (>=3 chars). The acronym
+    bridge catches extractor rewrites like 'TTL' -> 'Time-to-live (TTL)',
+    where the new patch's slot head ('time') doesn't appear in the old
+    patch's content words but the shared acronym 'TTL' anchors both
+    payloads to the same topic."""
+    for head, words in ((new_head, old_words), (old_head, new_words)):
+        if head and head not in _UNIT_ALIASES and head in words:
+            return True
+    # Issue #2 extension: shared all-caps acronym bridges the pair when
+    # the slot heads don't (e.g. extractor rewrote 'TTL' to
+    # 'Time-to-live (TTL)'). Acronyms are tight enough to anchor on --
+    # they are specific technical terms, never generic nouns like
+    # 'requests' or 'records' that would falsely merge scoped facts.
+    if new_payload and old_payload:
+        new_acro = {w.lower() for w in re.findall(r"\b[A-Z]{3,}\b", new_payload)}
+        old_acro = {w.lower() for w in re.findall(r"\b[A-Z]{3,}\b", old_payload)}
+        if new_acro & old_acro:
+            return True
+    return False
 
 
 # v0.1.15: extract time/size units from ALL words in the payload.
@@ -386,7 +412,8 @@ def _dedup_chain(values: List[str]) -> List[str]:
 
 # v0.1.12: the value a superseded patch gives up, for (was X) baking.
 # v0.1.14: chains are deduplicated before joining.
-def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[str]:
+def _replaced_value(stale_payload: str, new_current: Optional[str],
+                    new_payload: str = "") -> Optional[str]:
     """The value a superseded patch gives up, for (was X) baking.
 
     - plain stale patch ("timeout 30 seconds") -> its current value, "30"
@@ -396,13 +423,39 @@ def _replaced_value(stale_payload: str, new_current: Optional[str]) -> Optional[
       lineage: "... 300 (was 60)" gives "300 then 60"
     - v0.1.14: chains are deduplicated — "300 then 300 then 60" gives
       "300 then 60" (the same value isn't baked twice)
-    Returns None when the stale patch carries no numbers at all."""
+    - Bug #3b: day-only revisions. Patches whose value is a weekday name
+      carry no digits, so the numeric chain logic above never fired —
+      'Deadline updated to Monday (was Friday)' superseded by 'Deadline
+      moved to Wednesday' returned just 'Friday' (the history), silently
+      dropping 'Monday' (the stale's current day). The day name is now
+      detected and used as the chain's current value, with original case
+      preserved, so the lineage builds correctly: 'Wednesday (was Monday
+      then Friday)'. The restatement check (new_payload mentions the
+      stale's current day) returns history only, mirroring the numeric
+      current_val == new_current branch.
+    Returns None when the stale patch carries no numbers AND no day names."""
     m = re.search(r"\(was ([^)]+)\)", stale_payload)
     history = m.group(1).strip() if m else None
     base = re.sub(r"\(was [^)]+\)", "", stale_payload)
     s_nums = [w for w in base.split() if re.search(r"\d", w)]
     current = s_nums[0] if s_nums else None
     current_val = _first_number(current) if current else None
+    # Bug #3b: day-only revisions. When the stale payload has no numbers,
+    # check for a weekday name and use it as the chain's current value
+    # (preserving original case). The restatement check mirrors the
+    # numeric branch: if the new payload mentions the same day, this is
+    # a same-day restatement, not a revision -- return history only.
+    if current is None:
+        day_m = re.search(
+            r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|"
+            r"Saturday|Sunday)\b",
+            base)
+        if day_m:
+            current = day_m.group(1)   # preserve original case
+            if new_payload:
+                new_days = _day_value(new_payload) or ""
+                if current.lower() in new_days.split():
+                    return history      # same-day restatement
     if current_val is not None and new_current is not None \
             and current_val == new_current:
         return history
@@ -490,6 +543,83 @@ def _echo_guard_reason(payload: str, turn_text: str,
     if in_turn + in_ctx_only == 0 and len(p_toks) >= 3:
         return "unattributed"
     return None
+
+
+# Issues #2/#3 (GitHub): weekday-value vocabulary. The numeric rules
+# compare values via _numbers(); deadline-style payloads carry no
+# digits, so (a2)/(c2) ('{} != {}' is False) and (b2) ('new_nums and'
+# fails on empty) can never fire. Weekday names are a CLOSED set, so
+# they anchor the same comparison: differing days = revision, matching
+# days = restatement. Full names only -- 'Mon'/'Fri' abbreviations and
+# relative days ('tomorrow') are a documented limitation.
+_DAY_NAMES = frozenset({
+    "monday", "tuesday", "wednesday", "thursday", "friday",
+    "saturday", "sunday",
+})
+
+
+def _day_value(text: str) -> Optional[str]:
+    """Issues #2/#3: the weekday names in a payload as one sorted
+    value ('friday monday'), or None when none appear. Lowercased
+    via _normalize() for case-insensitive comparison."""
+    days = _DAY_NAMES & {_normalize(w) for w in re.findall(r"\w+", text)}
+    return " ".join(sorted(days)) if days else None
+
+
+def _day_value_preserved(text: str) -> Optional[str]:
+    """Bug #3a: weekday names in their ORIGINAL case, sorted
+    space-joined, for baking into the (was X) span. _day_value()
+    lowercases via _normalize() so the value can be compared
+    case-insensitively, but the baked history should match the case
+    the user wrote -- 'Deadline set to Friday' bakes '(was Friday)',
+    not '(was friday)'."""
+    days = [w for w in re.findall(r"\w+", text)
+            if w.lower() in _DAY_NAMES]
+    return " ".join(sorted(days, key=str.lower)) if days else None
+
+
+def _day_revision(new_payload: str, old_payload: str) -> Optional[str]:
+    """Issues #2/#3 (GitHub): compare weekday-bearing payloads the way
+    the numeric rules compare numbers, anchored on day names.
+
+    Returns 'revision' when both sides carry weekday values and they
+    differ (a revision marker is then required), 'restatement' when they
+    match (value safety mirrors (b2): identical numbers, identical
+    units, compatible bounds), None otherwise.
+
+    Guards mirror _thin_slot_revision (issue #2 TTL): the new payload's
+    slot head must appear in the stale payload's content words, and it
+    must bring no scope qualifier of its own -- so 'Report deadline
+    moved to Monday' does not supersede 'Invoice deadline set to
+    Friday', and 'Team lunch moved to Monday' does not touch 'deadline
+    set to Friday'. The day words themselves are exempt from the
+    residue check: they ARE the value, not a scope.
+    """
+    new_day, old_day = _day_value(new_payload), _day_value(old_payload)
+    if not new_day or not old_day:
+        return None
+    new_head = _slot_head(new_payload)
+    if not new_head or new_head not in _content_words(old_payload):
+        return None
+    shared = _content_words(new_payload) & _content_words(old_payload)
+    for w in _content_words(new_payload) - shared:
+        if (len(w) >= 4 and w.isalpha()
+                and w not in _DAY_NAMES
+                and w not in _REVISION_MARKERS and w not in _UNIT_ALIASES
+                and w not in _BOUND_UP and w not in _BOUND_DOWN
+                and w not in _BOUND_EXACT and w not in _POLARITY_NEG
+                and w not in _PROPERTY_NOUNS and w not in _ECHO_VERBS):
+            return None
+    if new_day != old_day:
+        return "revision" if _has_revision_marker(new_payload) else None
+    if _numbers(new_payload) != _numbers(old_payload):
+        return None
+    if _units_in(new_payload) != _units_in(old_payload):
+        return None
+    if not _polarity_compatible(_bound_class(new_payload),
+                                _bound_class(old_payload)):
+        return None
+    return "restatement"
 
 
 class DSPMMemory:
@@ -604,6 +734,62 @@ class DSPMMemory:
         self.turns += 1
         return patches
 
+    async def async_add_turn(self, role: str, text: str) -> List[SemanticPatch]:
+        """Async version of add_turn. Awaits the LLM extraction call
+        instead of blocking. Same merge semantics, same return value.
+
+        Bug #7b: on a busy chatbot server, the sync add_turn() blocks
+        the calling thread for 1-10 seconds per turn (longer for
+        reasoning models). The async version frees the event loop
+        during the LLM call so other requests can be served.
+
+        Auto-detects the client's async capability (see
+        async_extract_turn's docstring). Works with both AsyncOpenAI
+        (native async) and sync OpenAI (wrapped in asyncio.to_thread).
+
+        Usage:
+            # FastAPI / aiohttp / any async framework:
+            @app.post("/chat")
+            async def chat(req):
+                patches = await mem.async_add_turn('user', req.text)
+                ctx = mem.get_context()
+                return {'context': ctx, 'patches': len(patches)}
+        """
+        if self.llm_client is None:
+            raise ValueError("llm_client is required to call add_turn()")
+
+        dense = self.dense or numeric_density(text) >= DENSE_AUTO_THRESHOLD
+        recent = self._last_context if self.feedback_context else ""
+        if self.feedback_fence and recent:
+            recent = (f"{_FEEDBACK_FENCE_OPEN}\n{recent}\n"
+                      f"{_FEEDBACK_FENCE_CLOSE}\n{_FEEDBACK_FENCE_RULES}")
+        patches = await async_extract_turn(
+            self.llm_client, self.model, text, self.turns,
+            role=role,
+            recent_context=recent,
+            dense=dense,
+            strict=self.strict_llm,
+            telemetry=self._llm_telemetry,
+            reasoning_param_mode=self.reasoning_param_mode,
+            max_tokens_floor=self.max_tokens_floor)
+        if self.echo_guard and self.feedback_context and self._last_context:
+            kept: List[SemanticPatch] = []
+            for p in patches:
+                reason = _echo_guard_reason(p.payload, text, self._last_context)
+                if reason == "echo":
+                    self._llm_telemetry["llm_echo_drops"] += 1
+                elif reason == "unattributed":
+                    self._llm_telemetry["llm_unattributed_drops"] += 1
+                else:
+                    kept.append(p)
+            patches = kept
+        self._conversation_tokens += count_tokens(text)
+        for p in patches:
+            p.source_role = role
+            self._merge_patch(p)
+        self.turns += 1
+        return patches
+
     def add_document(self, text: str, chunk_tokens: int = 400) -> int:
         """Ingest a document as sentence-aware chunks. Returns chunk count."""
         if not text or not text.strip():
@@ -662,6 +848,10 @@ class DSPMMemory:
     #        87-70% on 'Audit retention set to 5 years' + 'Retain
     #        audit logs for exactly 5 years' and on
     #        confirmation-verb dashboard echoes)
+    #   (a4)/(c4)/(b7) day-value rules (issues #2/#3): weekday names
+    #        anchor revision (days differ + marker) and restatement
+    #        (days match + (b2) value safety); head containment +
+    #        no-own-qualifier guards keep scoped slots apart
     #
     # v0.1.15: rule (b2) collapses same-type restatements (user states,
     # assistant confirms — "audit retention 5 years" vs "audit logs stored
@@ -721,6 +911,17 @@ class DSPMMemory:
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (a2) terse revision
                         continue
+                    # Issues #2/#3 (GitHub): weekday-value revision and
+                    # restatement -- the numberless deadline pairs.
+                    # 'deadline set to Friday' beside 'Deadline moved to
+                    # Monday': (a2) needs changed NUMBERS and
+                    # frozenset() != frozenset() is False. 'Deadline
+                    # updated to Monday' next to 'Deadline moved to
+                    # Monday': (b2) needs `new_nums and ...`, which
+                    # empty fails. Day names anchor the comparison.
+                    if _day_revision(patch.payload, existing.payload) is not None:
+                        stale.append(existing)          # (a4)/(b7) day-value rules (issues #2/#3)
+                        continue
                     # v0.1.15: (b) same-value restatement now requires
                     # identical units (fixes "rate 100 per minute" vs
                     # "rate 100 per hour" false-positive); v0.1.16 adds
@@ -766,6 +967,13 @@ class DSPMMemory:
                     if marker and new_head and new_head == _slot_head(existing.payload) \
                             and new_nums != _numbers(existing.payload):
                         stale.append(existing)          # (c2) terse cross-type
+                        continue
+                    # Issues #2/#3 (GitHub): cross-type mirror of the
+                    # day-value rules -- the reported shape is [CON]
+                    # 'deadline set to Friday' beside [DEC] 'Deadline
+                    # moved to Monday'.
+                    if _day_revision(patch.payload, existing.payload) is not None:
+                        stale.append(existing)          # (c4)/(b7) day-value rules (issues #2/#3)
                         continue
                     # v0.1.17 (finding S1): (b3) cross-type same-value
                     # restatement. Live smoke evidence: the user states a
@@ -847,13 +1055,13 @@ class DSPMMemory:
                     # plus every (b3)/(b4) safety: identical
                     # numbers, identical units, compatible bounds,
                     # never plain/plain, <=2 turns.
-                    old_words = set(re.findall(r"\w+", existing.payload.lower()))
-                    new_words = set(re.findall(r"\w+", patch.payload.lower()))
-                    if (len(old_words & new_words) >= 2
-                            and any(re.search(r"\d", w) for w in old_words & new_words)
+                    old_raw = set(re.findall(r"\w+", existing.payload.lower()))
+                    new_raw = set(re.findall(r"\w+", patch.payload.lower()))
+                    if (len(old_raw & new_raw) >= 2
+                            and any(re.search(r"\d", w) for w in old_raw & new_raw)
                             and new_nums == _numbers(existing.payload)
-                            and old_head and old_head in new_words
-                            and new_head and new_head in old_words
+                            and old_head and old_head in new_raw
+                            and new_head and new_head in old_raw
                             and _units_in(patch.payload) == _units_in(existing.payload)
                             and _polarity_compatible(bc_new, bc_old)
                             and not (bc_new == "plain" and bc_old == "plain")
@@ -872,6 +1080,23 @@ class DSPMMemory:
                         stale.append(existing)          # (b6) shared-subject echo bridge
                         continue
 
+                # Issue #2 (a3): revision whose topic word is not the FIRST word of
+                # both payloads ('Cache TTL must be 60 seconds' vs 'TTL is now 120
+                # seconds', or 'Time-to-live (TTL) setting updated ...' where the
+                # shared acronym 'TTL' bridges the rewritten head). Needs a revision
+                # marker, differing numbers on both sides, the same non-empty unit
+                # set, and one slot head found in the other payload OR a shared
+                # all-caps acronym. Any type pair.
+                if (marker and new_nums and _numbers(existing.payload)
+                        and new_nums != _numbers(existing.payload)
+                        and _units_in(patch.payload)
+                        and _units_in(patch.payload) == _units_in(existing.payload)
+                        and _head_anchored(new_head, _slot_head(existing.payload),
+                                           _content_words(patch.payload),
+                                           _content_words(existing.payload),
+                                           patch.payload, existing.payload)):
+                    stale.append(existing)          # (a3) revision, head anchored elsewhere
+                    continue
         # bake replaced values into the surviving payload
         if stale and patch.is_critical:
             patch_base = re.sub(r"\(was [^)]+\)", "", patch.payload)
@@ -879,7 +1104,20 @@ class DSPMMemory:
             new_current = _first_number(patch_nums[0]) if patch_nums else None
             replaced_vals = []
             for s in stale:
-                val = _replaced_value(s.payload, new_current)
+                # Bug #3: pass patch.payload so _replaced_value can do
+                # the same-day restatement check for day-only revisions.
+                val = _replaced_value(s.payload, new_current, patch.payload)
+                if not val:
+                    # Issues #2/#3 fallback: day-only revisions that
+                    # _replaced_value couldn't handle (e.g. abbreviated
+                    # days). Use _day_value_preserved so the baked span
+                    # keeps the original capitalization.
+                    d_preserved = _day_value_preserved(s.payload)
+                    if d_preserved:
+                        stale_days = set(d_preserved.lower().split())
+                        new_days = set((_day_value(patch_base) or "").split())
+                        if not (stale_days & new_days):
+                            val = d_preserved
                 if val:
                     replaced_vals.append(val)
             if replaced_vals and "(was" not in patch.payload:
@@ -1116,8 +1354,33 @@ class DSPMMemory:
             critical_selected = critical_total
         raw_tokens = sum(count_tokens(p.to_prompt_str()) for p in self.patches)
         context_tokens = count_tokens(self._last_context) if self._last_context else 0
-        crr = 100 if critical_total == 0 else int((critical_selected / critical_total) * 100)
+        # Bug #4b: CRR honesty. Pre-build, CRR is assumed 100 (no
+        # measurement yet -- backward compatible). Post-build with zero
+        # criticals, reporting 100 would be vacuously perfect and hide
+        # the real problem (e.g. PCI-DSS mistyped as [entity] never
+        # entered the critical set). The honest value is 0: we tried
+        # to deliver criticals but there were none to deliver.
+        if not self._context_built:
+            crr = 100
+        elif critical_total == 0:
+            crr = 0
+        else:
+            crr = int((critical_selected / critical_total) * 100)
         trr = 100 - int((context_tokens / max(1, raw_tokens)) * 100) if raw_tokens else 0
+        # Bug #6 (Option B): add trr_by_conversation as the honest metric.
+        # The existing trr measures PATCH compression (extractor efficiency:
+        # how much did the LLM compress the conversation into patches).
+        # trr_by_conversation measures CONVERSATION compression
+        # (end-to-end system efficiency: how much did DSPM compress the
+        # raw conversation down to the delivered context) -- the number
+        # users actually care about. Pre-fix: a 55-token conversation
+        # extracting to 16 patch tokens and delivering 16 context tokens
+        # reported trr=0% (looks like zero reduction) when the real
+        # end-to-end compression was 71%.
+        trr_by_conversation = (
+            100 - int((context_tokens / max(1, self._conversation_tokens)) * 100)
+            if self._conversation_tokens else 0
+        )
         # v0.1.16 (review points 1+4): selected mirrors the
         # critical_selected fallback -- pre-build it reports the store
         # size, post-build the delivered size. context_built lets anyone
@@ -1143,6 +1406,7 @@ class DSPMMemory:
             "patch_tokens": raw_tokens,
             "context_tokens": context_tokens,
             "trr": trr,
+            "trr_by_conversation": trr_by_conversation,
             # v0.1.17 (review point 2): attribution census for criticals
             # -- 'unattributed' covers pre-0.1.17 notebooks.
             "critical_by_role": dict(sorted(roles.items())),

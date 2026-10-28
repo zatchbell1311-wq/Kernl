@@ -1786,3 +1786,346 @@ def test_shared_subject_bridge_edge_guards():
     m4._merge_patch(SemanticPatch('s1', 1, 'decision',
                                   'Confirmed sub-2-minute dashboard', []))
     assert len(m4.critical_patches) == 2, "unit mismatch inside the compound"
+
+
+# ── Issue #2 (GitHub): extractor-rewrite supersession gap ─────────
+# Live evidence (gpt-oss-120b): the extractor rewrote 'TTL' to
+# 'Time-to-live (TTL)' and added filler 'as specified'. The new
+# patch's slot head became 'time' (first word of 'Time-to-live'),
+# which doesn't appear in the old patch's content words, so (a3)'s
+# _head_anchored check fails and the stale 60s patch survives
+# alongside the new 120s patch. Both criticals render, the store
+# bloats, CRR is reported as 50% on this slot.
+
+
+def test_issue2_ttl_dec_to_dec_extractor_rewrite_supersedes():
+    """Issue #2 (gpt-oss-120b shape, same-type): the extractor rewrites
+    'TTL' to 'Time-to-live (TTL)' and adds 'as specified'. The new
+    [DEC] patch's slot head is 'time', absent from the old [DEC]
+    'Cache TTL must be 60 seconds' content words, so (a3) misses.
+    Shared acronym 'TTL' should bridge."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Cache TTL must be 60 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Time-to-live (TTL) setting updated to 120 seconds as specified', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"stale 60s survived extractor rewrite: {crits}"
+    assert '120' in crits[0]
+    assert '(was' in crits[0] and '60' in crits[0]
+
+
+def test_issue2_ttl_con_to_dec_extractor_rewrite_supersedes():
+    """Issue #2 (gpt-oss-120b shape, cross-type): same extractor
+    rewrite, but old patch is a [CON] (covers the case where the
+    original requirement was a constraint and the revision is a
+    decision)."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Cache TTL must be 60 seconds', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Time-to-live (TTL) setting updated to 120 seconds as specified', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"stale 60s survived extractor rewrite: {crits}"
+    assert '120' in crits[0]
+    assert '(was' in crits[0] and '60' in crits[0]
+
+
+# ── Bug #2 regression: deadline supersession renders a single line ──
+
+def test_bug2_deadline_supersession_renders_single_line():
+    """Bug #2 (duplicate rendering): 'Deadline set to Friday' followed
+    by 'Deadline updated to Monday' must render as a SINGLE line in
+    the delivered context, with the old day baked as (was Friday).
+    Pre-fix: both old and new patches rendered simultaneously,
+    bloating the context with duplicate deadline lines."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Deadline set to Friday', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Deadline updated to Monday', []))
+    # Store check: only one critical survives
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"stale Friday survived: {crits}"
+    # Render check: exactly one deadline-related line in context
+    ctx = m.get_context(query='deadline')
+    deadline_lines = [l for l in ctx.splitlines()
+                      if 'deadline' in l.lower()
+                      or 'monday' in l.lower()
+                      or 'friday' in l.lower()]
+    assert len(deadline_lines) == 1, \
+        f"duplicate rendering (Bug #2): {deadline_lines}"
+    assert 'Monday' in ctx
+    # Cross-type variant
+    m2 = DSPMMemory(budget=250)
+    m2._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                  'Deadline set to Friday', []))
+    m2._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                  'Deadline moved to Monday', []))
+    assert len(m2.critical_patches) == 1, \
+        f"cross-type deadline not superseded: {[p.payload for p in m2.critical_patches]}"
+    # Scoped variant: different deadlines stay apart
+    m3 = DSPMMemory(budget=250)
+    m3._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                  'Invoice deadline set to Friday', []))
+    m3._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                  'Report deadline moved to Monday', []))
+    assert len(m3.critical_patches) == 2, \
+        f"scoped deadlines wrongly merged: {[p.payload for p in m3.critical_patches]}"
+
+
+# ── Bug #3: non-numeric revision (Friday -> Monday) ──────────────
+# Two sub-bugs found via scripts/verify_bug2_bug3.py:
+#   3a - capitalization lost in the baked (was X) span
+#   3b - chain truncation: 'Mon (was Fri)' superseded by 'Wed'
+#        baked only '(was Fri)', dropping 'Mon' from the lineage
+
+def test_bug3a_day_revision_bakes_capitalized_day():
+    """Bug #3a: the (was X) span must preserve the day name's original
+    capitalization. Pre-fix: 'Deadline set to Friday' superseded by
+    'Deadline updated to Monday' baked '(was friday)' (lowercased)
+    because _day_value() lowercases via _normalize()."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Deadline set to Friday', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Deadline updated to Monday', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1
+    assert '(was Friday)' in crits[0], \
+        f"day name lowercased in baked history: {crits[0]!r}"
+    assert '(was friday)' not in crits[0], \
+        f"lowercased day name leaked into history: {crits[0]!r}"
+
+
+def test_bug3b_day_revision_chain_bakes_full_lineage():
+    """Bug #3b: a revision of a previously-revised day patch must
+    chain the full lineage. Pre-fix: 'Deadline updated to Monday
+    (was Friday)' superseded by 'Deadline moved to Wednesday' baked
+    only '(was Friday)', silently dropping 'Monday' from the chain
+    because _replaced_value's numeric chain logic never fires for
+    day-only patches (no digits -> current is None)."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Deadline set to Friday', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Deadline updated to Monday', []))
+    m._merge_patch(SemanticPatch('p2_0', 2, 'decision',
+                                 'Deadline moved to Wednesday', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1, f"chain should collapse to one critical: {crits}"
+    assert 'Wednesday' in crits[0], f"current value missing: {crits[0]!r}"
+    assert '(was Monday then Friday)' in crits[0], \
+        f"full day lineage not chained: {crits[0]!r}"
+
+
+def test_bug3_day_revision_same_day_restatement_no_baking():
+    """Bug #3 guard: a same-day restatement ('updated to Monday' +
+    'moved to Monday') must NOT bake a (was X) span — it's the
+    same value, not a revision. The restatement check inside
+    _replaced_value must short-circuit and return history (None)
+    when the new patch mentions the stale's current day."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Deadline updated to Monday', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Deadline moved to Monday', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 1
+    assert '(was' not in crits[0], \
+        f"same-day restatement should not bake: {crits[0]!r}"
+
+
+def test_bug3_day_revision_scoped_deadlines_stay_apart():
+    """Bug #3 guard: scoped deadlines ('Invoice deadline' vs 'Report
+    deadline') must NOT supersede each other — they're different slots.
+    The _day_revision head-containment guard must reject pairs whose
+    new patch's slot head doesn't appear in the stale's content words."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'decision',
+                                 'Invoice deadline set to Friday', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'decision',
+                                 'Report deadline moved to Monday', []))
+    crits = [p.payload for p in m.critical_patches]
+    assert len(crits) == 2, \
+        f"scoped deadlines wrongly merged: {crits}"
+
+
+# ── Bug #4: crr=100 but PCI-DSS never critical ───────────────────
+# Two root causes found via scripts/verify_bug4.py:
+#   4a - extractor prompt has no compliance/security classification
+#        rule, so PCI-DSS gets typed as [entity] (non-critical)
+#   4b - CRR formula returns 100 vacuously when critical_total == 0
+
+def test_bug4a_extractor_prompt_classifies_compliance_as_constraint():
+    """Bug #4a: the system prompt must tell the LLM that regulatory,
+    compliance, and security requirements (PCI-DSS, HIPAA, GDPR, SOC 2,
+    ISO 27001, FedRAMP, etc.) are CONSTRAINTS, not entities — even when
+    they are named things. They are non-negotiable specs the system must
+    satisfy. Pre-fix: the prompt mentioned 'entity holds named things'
+    with no compliance rule, so PCI-DSS was typed as [entity]
+    (non-critical)."""
+    from dspm.extractor import _build_system_prompt
+    for dense in (True, False):
+        prompt = _build_system_prompt(dense=dense)
+        prompt_lower = prompt.lower()
+        assert ('pci-dss' in prompt_lower
+                or 'hipaa' in prompt_lower
+                or 'compliance' in prompt_lower), \
+            f"dense={dense}: prompt lacks compliance classification rule"
+        # The rule must explicitly say compliance requirements are
+        # constraints, not just mention the keywords
+        assert 'constraint' in prompt_lower, \
+            f"dense={dense}: prompt must reference constraint type"
+
+
+def test_bug4b_crr_honest_when_no_criticals_post_build():
+    """Bug #4b: when get_context() has been called but the store has
+    zero critical patches, CRR must NOT report 100 vacuously. Pre-fix:
+    crr=100 hid the fact that PCI-DSS info was never classified as
+    critical (it was typed as [entity], which is non-critical). The
+    honest value is 0 -- we tried to deliver criticals but there were
+    none to deliver."""
+    m = DSPMMemory(budget=250)
+    # Simulate PCI-DSS mistyped as [entity] (the bug shape)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'entity',
+                                 'PCI-DSS compliance required', []))
+    m._merge_patch(SemanticPatch('p1_0', 1, 'entity',
+                                 'HIPAA compliant', []))
+    # Pre-build: CRR is assumed 100 (backward compat)
+    assert m.stats['crr'] == 100, "pre-build should assume 100"
+    assert m.stats['context_built'] is False
+    # Post-build: CRR must be honest about the empty critical set
+    m.get_context(query='compliance')
+    s = m.stats
+    assert s['context_built'] is True
+    assert s['critical_total'] == 0
+    assert s['crr'] == 0, \
+        f"vacuous 100% post-build hides missing criticals: {s}"
+
+
+def test_bug4b_crr_pre_build_still_100_for_backward_compat():
+    """Bug #4b guard: pre-build, CRR still reports 100 (assumed
+    perfect) for backward compatibility. The honesty fix only kicks
+    in post-build, because pre-build we haven't measured anything yet."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'entity',
+                                 'PCI-DSS compliance required', []))
+    s = m.stats
+    assert s['context_built'] is False
+    assert s['critical_total'] == 0
+    assert s['crr'] == 100, "pre-build should assume 100"
+
+
+def test_bug4b_crr_still_100_with_real_criticals():
+    """Bug #4b guard: when critical_total > 0, CRR formula is unchanged.
+    The fix only affects the critical_total == 0 post-build case."""
+    m = DSPMMemory(budget=250)
+    m._merge_patch(SemanticPatch('p0_0', 0, 'constraint',
+                                 'Webhook timeout must be 30 seconds', []))
+    assert m.stats['crr'] == 100  # pre-build
+    m.get_context(query='webhook')
+    s = m.stats
+    assert s['critical_total'] == 1
+    assert s['crr'] == 100, f"real criticals should still report 100: {s}"
+
+
+# ── Bug #5: partial truncation is parsed instead of discarded ─────────
+
+def test_bug5_partial_length_content_is_not_discarded():
+    """Non-empty content returned with finish_reason='length' must reach
+    parse_extraction. Partial JSON may parse or fail, but it must not be
+    treated as an empty truncation or retried."""
+    from types import SimpleNamespace
+    from dspm.extractor import extract_turn
+
+    class PartialLengthClient:
+        def __init__(self):
+            self.calls = 0
+
+            class Completions:
+                def create(inner_self, **kwargs):
+                    self.calls += 1
+                    return SimpleNamespace(choices=[SimpleNamespace(
+                        message=SimpleNamespace(content='[{"patch_type":"entity"'),
+                        finish_reason="length",
+                    )])
+
+            self.chat = SimpleNamespace(completions=Completions())
+
+    llm = PartialLengthClient()
+    telemetry = {}
+
+    # Use a direct extraction call so the test can observe a parse attempt
+    # without depending on DSPMMemory's private telemetry callback wiring.
+    patches = extract_turn(llm, 'test-model', 'We use Stripe.', 0, telemetry=telemetry)
+    assert patches == []  # the deliberately incomplete JSON cannot recover
+    assert telemetry.get('llm_length_finish', 0) == 0, \
+        f"partial truncation should NOT bump llm_length_finish: {telemetry}"
+    assert telemetry.get('llm_calls') == 1, \
+        f"partial content should not retry: {telemetry}"
+
+
+# ── Bug #6: TRR computed on patch_tokens, not conversation_tokens ───
+# Root cause confirmed via scripts/verify_bug6.py: a 55-token
+# conversation extracting to 16 patch tokens and delivering 16 context
+# tokens reported trr=0% (looks like zero reduction) when the real
+# end-to-end compression was 71%.
+# Fix (Option B): add trr_by_conversation alongside existing trr.
+# Backward compatible: existing trr key still present, just renamed
+# semantically to "patch-compression TRR".
+
+def test_bug6_trr_by_conversation_uses_correct_denominator():
+    """Bug #6: trr_by_conversation uses conversation_tokens as the
+    denominator (raw turn text fed to add_turn), not patch_tokens
+    (extracted patches)."""
+    from dspm.patch import count_tokens
+    llm = MockLLMClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model')
+    t1 = 'Return JSON and use POST /v1/items for creation.'
+    t2 = 'All API responses must include a request id header.'
+    mem.add_turn('user', t1)
+    mem.add_turn('assistant', t2)
+    mem.get_context('json')
+    s = mem.stats
+    expected_conv = count_tokens(t1) + count_tokens(t2)
+    assert s['conversation_tokens'] == expected_conv, \
+        f"conversation_tokens wrong: {s}"
+    expected_trr_conv = 100 - int(
+        (s['context_tokens'] / max(1, s['conversation_tokens'])) * 100)
+    assert s['trr_by_conversation'] == expected_trr_conv, \
+        f"trr_by_conversation wrong: expected {expected_trr_conv}, got {s['trr_by_conversation']}"
+    assert s['trr'] != s['trr_by_conversation'] or s['patch_tokens'] == s['conversation_tokens'], \
+        f"trr and trr_by_conversation should differ when patch_tokens != conversation_tokens: {s}"
+
+
+def test_bug6_trr_key_still_present_for_backward_compat():
+    """The existing trr key remains available alongside the new metric."""
+    llm = MockLLMClient()
+    mem = DSPMMemory(budget=250, llm_client=llm, model='test-model')
+    mem.add_turn('user', 'Return JSON output.')
+    s = mem.stats
+    assert 'trr' in s, "trr key must remain for backward compat"
+    assert 'trr_by_conversation' in s, "trr_by_conversation key must be added"
+
+
+def test_bug6_trr_by_conversation_zero_when_no_conversation():
+    """No conversation input means the end-to-end reduction is undefined
+    and is reported as zero."""
+    m = DSPMMemory(budget=250)
+    s = m.stats
+    assert s['conversation_tokens'] == 0
+    assert s['trr_by_conversation'] == 0, \
+        f"trr_by_conversation should be 0 with no conversation: {s}"
+
+
+def test_bug6_trr_by_conversation_100_when_context_empty():
+    """An empty delivered context with non-empty conversation input means
+    full end-to-end token reduction."""
+    m = DSPMMemory(budget=250)
+    m._conversation_tokens = 50
+    m.get_context(query='whatever')
+    s = m.stats
+    assert s['context_tokens'] == 0, s
+    assert s['trr_by_conversation'] == 100, \
+        f"empty context + non-empty conversation should be 100%: {s}"

@@ -1,0 +1,109 @@
+{
+  "ok": true,
+  "strict": false,
+  "browserSkipped": false,
+  "lint": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "filesScanned": 1
+  },
+  "runtime": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": []
+  },
+  "layout": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "duration": 15,
+    "samples": [
+      0.833,
+      2.5,
+      4.167,
+      5.833,
+      7.5,
+      9.167,
+      10.833,
+      12.5,
+      14.167
+    ],
+    "transitionSamples": [],
+    "transitionSamplesDropped": 0,
+    "tolerance": 2,
+    "totalIssueCount": 0,
+    "truncated": false
+  },
+  "motion": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": false,
+    "samples": 0
+  },
+  "contrast": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": true,
+    "samples": [
+      0.833,
+      4.167,
+      7.5,
+      10.833,
+      14.167
+    ],
+    "checked": 40,
+    "passed": 40
+  },
+  "craft": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": true,
+    "step": 0.125,
+    "samples": 120
+  },
+  "audio": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": []
+  },
+  "hdr": {
+    "autoPromotion": null,
+    "inspection": "available"
+  },
+  "snapshots": {
+    "enabled": true,
+    "files": [
+      ".hyperframes\\artifacts\\snapshots\\711222a5-c162-4675-988b-403326ad3827\\frame-00-at-0.8s.png",
+      ".hyperframes\\artifacts\\snapshots\\711222a5-c162-4675-988b-403326ad3827\\frame-01-at-4.2s.png",
+      ".hyperframes\\artifacts\\snapshots\\711222a5-c162-4675-988b-403326ad3827\\frame-02-at-7.5s.png",
+      ".hyperframes\\artifacts\\snapshots\\711222a5-c162-4675-988b-403326ad3827\\frame-03-at-10.8s.png",
+      ".hyperframes\\artifacts\\snapshots\\711222a5-c162-4675-988b-403326ad3827\\frame-04-at-14.2s.png"
+    ],
+    "times": [
+      0.833,
+      4.167,
+      7.5,
+      10.833,
+      14.167
+    ],
+    "findingFiles": []
+  }
+}

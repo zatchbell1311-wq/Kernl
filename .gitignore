@@ -49,3 +49,21 @@ debug.log
 
 *_analysis.txt
 qdrant_local_db/
+
+dspm_smoke_venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+
+dspm_smoke_venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+

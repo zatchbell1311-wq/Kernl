@@ -159,16 +159,25 @@ def test_strict_llm_empty_completion_raises(monkeypatch):
 
 def test_strict_llm_length_finish_empty_content_raises(monkeypatch):
     """Item 2: strict + finish_reason="length" with empty content ->
-    RuntimeError from the truncation branch. Empty content keeps the retry
-    loop running, so counters match item 1 plus llm_length_finish=1."""
+    RuntimeError from the truncation branch. Bug #5 fix: truncation is
+    now detected INSIDE the retry loop and exits immediately (no retry),
+    because retrying a deterministic truncation with the same params
+    wastes API calls + sleep time. The reasoning model burns the same
+    output budget on chain-of-thought every time. So the counters are
+    1 call (was 3), 0 llm_empty (was 3, since truncation now goes to
+    llm_length_finish), 0 retries (was 2), 1 llm_length_finish,
+    1 llm_fallbacks."""
     sleeps = _patch_sleep(monkeypatch)
     llm = FakeLLM(script=[EMPTY_LENGTH, EMPTY_LENGTH, EMPTY_LENGTH])
     mem = DSPMMemory(llm_client=llm, strict_llm=True)
     with pytest.raises(RuntimeError, match="output was truncated"):
         mem.add_turn("user", "set the escalation timeout to 300 seconds")
     assert mem.stats["turns"] == 0
-    assert _all_llm_counters(mem.stats) == (3, 3, 0, 2, 1, 0, 1)
-    assert sleeps == [2, 4]
+    # Bug #5: truncation exits immediately (deterministic failure, no retry)
+    assert _all_llm_counters(mem.stats) == (1, 0, 0, 0, 1, 0, 1)
+    assert len(llm.calls) == 1
+    # And we never slept (no retries -> no backoff)
+    assert sleeps == []
 
 
 def test_strict_llm_malformed_output_raises(monkeypatch):
