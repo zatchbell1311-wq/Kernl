@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dspm-memory"
-version = "0.1.20"
+version = "0.1.21"
 description = "Training-free conversation memory with structural critical-constraint retention and budgeted context rendering"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -29,6 +29,7 @@ classifiers = [
 ]
 dependencies = [
   "tiktoken>=0.5.0",
+  "portalocker>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -40,7 +41,6 @@ semantic = [
 Homepage = "https://github.com/zatchbell1311-wq/Kernl"
 Repository = "https://github.com/zatchbell1311-wq/Kernl"
 Issues = "https://github.com/zatchbell1311-wq/Kernl/issues"
-# Paper = "https://arxiv.org/abs/YOUR_ARXIV_ID"   ← uncomment and fill in when you get your arXiv ID
 
 [tool.setuptools]
 package-dir = {"" = "src"}

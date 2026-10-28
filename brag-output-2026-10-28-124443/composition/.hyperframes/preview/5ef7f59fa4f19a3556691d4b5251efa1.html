@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en" data-resolution="landscape">
+  <head><script data-hf-gsap-fallback>
+(function(){
+  var cdnBase="/api/vendor/npm/gsap@3.15.0/dist/";
+  var loaded={};
+  function loadFallback(file){
+    if(loaded[file])return loaded[file];
+    return loaded[file]=new Promise(function(ok,fail){
+      var s=document.createElement("script");
+      s.src=cdnBase+file;s.hfGsapFallback=true;s.onload=ok;s.onerror=fail;
+      document.head.appendChild(s);
+    });
+  }
+  document.addEventListener("error",function(e){
+    var t=e.target;
+    if(!t||t.tagName!=="SCRIPT"||!t.src||t.hfGsapFallback)return;
+    var m=t.src.match(/gsap[^/]*\/dist\/(.+\.js)/);
+    if(m)loadFallback(m[1]).catch(function(){
+      reportError(new Error("GSAP could not load from "+t.src+" or "+cdnBase+m[1]+", so this preview's animations will not play."));
+    });
+  },true);
+})();
+</script>
+<meta name="hyperframes-gsap-base-url" content="/api/vendor/npm">
+<meta name="hyperframes-studio-preview"><script>(function(){var seen=window.__hfPreviewErrors=[];
+addEventListener("error",function(e){seen.push(e.message||String(e))});})();</script>
+<base href="/api/projects/composition/preview/">
+<script type="importmap">{"imports":{"/":"/api/projects/composition/preview/","/api/projects/composition/preview/":"/api/projects/composition/preview/"}}</script><style data-hyperframes-text-rendering="true">html,body,*{text-rendering:geometricPrecision}</style><script data-hf-after-fonts-fallback="">document.addEventListener("DOMContentLoaded", function () {
+  if (window.__hfAfterFontsClaimed) return;
+  var T = "text/hf-after-fonts";
+  var all = [].slice.call(document.querySelectorAll('script[type="text/hf-after-fonts"], script[type="text/hf-after-fonts+module"]'));
+  if (!all.length) return;
+  console.warn("[hyperframes] the runtime has no web-font gate; composition scripts run without waiting for fonts");
+  var late = function (el) { return el.type !== T || el.matches('[defer][src], [defer][data-hf-inlined-src]'); };
+  var queue = all.filter(function (el) { return !late(el); }).concat(all.filter(late));
+  (function next() {
+    var el = queue.shift();
+    if (!el) return;
+    var s = document.createElement("script");
+    for (var i = 0; i < el.attributes.length; i++) s.setAttribute(el.attributes[i].name, el.attributes[i].value);
+    if (el.type === T) s.removeAttribute("type"); else s.type = "module";
+    s.async = el.hasAttribute("async");
+    s.text = el.text;
+    var waits = s.type !== "module" && s.hasAttribute("src") && !s.async && !s.noModule;
+    if (waits) { s.addEventListener("load", next); s.addEventListener("error", next); }
+    el.replaceWith(s);
+    if (!waits) next();
+  })();
+});
+//# sourceURL=hyperframes://after-fonts-fallback</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>DSPM - The Revision Stays</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script data-hf-inlined-src="assets/music/audio-data.js">window.DSPM_AUDIO_DATA = { "fps": 30, "totalFrames": 450, "frames": [{ "rms": 0.3364, "bands": [85e-4] }, { "rms": 0.3764, "bands": [54e-4] }, { "rms": 0.3633, "bands": [36e-4] }, { "rms": 0.3714, "bands": [44e-4] }, { "rms": 0.3305, "bands": [66e-4] }, { "rms": 0.2755, "bands": [0.021] }, { "rms": 0.2593, "bands": [0.0153] }, { "rms": 0.1758, "bands": [38e-4] }, { "rms": 0.2387, "bands": [56e-4] }, { "rms": 0.2028, "bands": [5e-3] }, { "rms": 0.1628, "bands": [25e-4] }, { "rms": 0.0903, "bands": [26e-4] }, { "rms": 0.2719, "bands": [42e-4] }, { "rms": 0.223, "bands": [11e-4] }, { "rms": 0.1152, "bands": [7e-4] }, { "rms": 0.0733, "bands": [16e-4] }, { "rms": 0.369, "bands": [23e-4] }, { "rms": 0.2859, "bands": [42e-4] }, { "rms": 0.2485, "bands": [44e-4] }, { "rms": 0.2009, "bands": [32e-4] }, { "rms": 0.1469, "bands": [2e-3] }, { "rms": 0.0731, "bands": [13e-4] }, { "rms": 0.036, "bands": [2e-4] }, { "rms": 0.0307, "bands": [3e-4] }, { "rms": 0.1717, "bands": [46e-4] }, { "rms": 0.2032, "bands": [39e-4] }, { "rms": 0.1254, "bands": [8e-4] }, { "rms": 0.1142, "bands": [12e-4] }, { "rms": 0.2053, "bands": [26e-4] }, { "rms": 0.3061, "bands": [33e-4] }, { "rms": 0.2321, "bands": [1e-3] }, { "rms": 0.2079, "bands": [12e-4] }, { "rms": 0.1752, "bands": [8e-4] }, { "rms": 0.0983, "bands": [7e-4] }, { "rms": 0.0596, "bands": [4e-4] }, { "rms": 0.0481, "bands": [4e-4] }, { "rms": 0.0468, "bands": [11e-4] }, { "rms": 0.3509, "bands": [31e-4] }, { "rms": 0.2442, "bands": [11e-4] }, { "rms": 0.2071, "bands": [5e-4] }, { "rms": 0.1784, "bands": [4e-4] }, { "rms": 0.1275, "bands": [5e-4] }, { "rms": 0.0781, "bands": [6e-4] }, { "rms": 0.0645, "bands": [3e-4] }, { "rms": 0.0747, "bands": [9e-4] }, { "rms": 0.311, "bands": [38e-4] }, { "rms": 0.2637, "bands": [25e-4] }, { "rms": 0.2456, "bands": [15e-4] }, { "rms": 0.2627, "bands": [27e-4] }, { "rms": 0.3643, "bands": [62e-4] }, { "rms": 0.2984, "bands": [1e-3] }, { "rms": 0.2324, "bands": [1e-3] }, { "rms": 0.2358, "bands": [5e-4] }, { "rms": 0.229, "bands": [9e-4] }, { "rms": 0.2131, "bands": [11e-4] }, { "rms": 0.1933, "bands": [4e-4] }, { "rms": 0.0471, "bands": [9e-4] }, { "rms": 0.2136, "bands": [38e-4] }, { "rms": 0.2617, "bands": [11e-4] }, { "rms": 0.2237, "bands": [2e-4] }, { "rms": 0.1987, "bands": [1e-4] }, { "rms": 0.1747, "bands": [4e-4] }, { "rms": 0.1299, "bands": [4e-4] }, { "rms": 0.068, "bands": [3e-4] }, { "rms": 0.0982, "bands": [2e-4] }, { "rms": 0.2876, "bands": [19e-4] }, { "rms": 0.2343, "bands": [11e-4] }, { "rms": 0.1959, "bands": [7e-4] }, { "rms": 0.1797, "bands": [12e-4] }, { "rms": 0.2298, "bands": [15e-4] }, { "rms": 0.2849, "bands": [8e-4] }, { "rms": 0.2283, "bands": [9e-4] }, { "rms": 0.2003, "bands": [8e-4] }, { "rms": 0.2464, "bands": [16e-4] }, { "rms": 0.2452, "bands": [12e-4] }, { "rms": 0.2193, "bands": [2e-4] }, { "rms": 0.1317, "bands": [8e-4] }, { "rms": 0.2068, "bands": [19e-4] }, { "rms": 0.2538, "bands": [1e-3] }, { "rms": 0.1823, "bands": [5e-4] }, { "rms": 0.1386, "bands": [8e-4] }, { "rms": 0.2551, "bands": [38e-4] }, { "rms": 0.353, "bands": [28e-4] }, { "rms": 0.2869, "bands": [21e-4] }, { "rms": 0.2334, "bands": [1e-3] }, { "rms": 0.1578, "bands": [6e-4] }, { "rms": 0.0759, "bands": [7e-4] }, { "rms": 0.0709, "bands": [3e-4] }, { "rms": 0.0587, "bands": [2e-4] }, { "rms": 0.0424, "bands": [22e-4] }, { "rms": 0.369, "bands": [79e-4] }, { "rms": 0.3778, "bands": [45e-4] }, { "rms": 0.3343, "bands": [19e-4] }, { "rms": 0.2573, "bands": [44e-4] }, { "rms": 0.3048, "bands": [28e-4] }, { "rms": 0.2217, "bands": [13e-4] }, { "rms": 0.2058, "bands": [4e-4] }, { "rms": 0.185, "bands": [4e-4] }, { "rms": 0.1231, "bands": [6e-4] }, { "rms": 0.0538, "bands": [4e-4] }, { "rms": 0.0344, "bands": [2e-4] }, { "rms": 0.0362, "bands": [4e-4] }, { "rms": 0.2395, "bands": [2e-3] }, { "rms": 0.2826, "bands": [16e-4] }, { "rms": 0.2486, "bands": [6e-4] }, { "rms": 0.2075, "bands": [9e-4] }, { "rms": 0.1659, "bands": [6e-4] }, { "rms": 0.1079, "bands": [4e-4] }, { "rms": 0.0727, "bands": [3e-4] }, { "rms": 0.0631, "bands": [7e-4] }, { "rms": 0.258, "bands": [24e-4] }, { "rms": 0.2958, "bands": [11e-4] }, { "rms": 0.2456, "bands": [13e-4] }, { "rms": 0.1857, "bands": [28e-4] }, { "rms": 0.3293, "bands": [73e-4] }, { "rms": 0.2842, "bands": [29e-4] }, { "rms": 0.2399, "bands": [13e-4] }, { "rms": 0.219, "bands": [1e-3] }, { "rms": 0.2145, "bands": [9e-4] }, { "rms": 0.2188, "bands": [8e-4] }, { "rms": 0.2283, "bands": [8e-4] }, { "rms": 0.1644, "bands": [5e-4] }, { "rms": 0.0568, "bands": [24e-4] }, { "rms": 0.3419, "bands": [37e-4] }, { "rms": 0.2557, "bands": [9e-4] }, { "rms": 0.2168, "bands": [9e-4] }, { "rms": 0.1769, "bands": [9e-4] }, { "rms": 0.141, "bands": [7e-4] }, { "rms": 0.1282, "bands": [7e-4] }, { "rms": 0.1068, "bands": [5e-4] }, { "rms": 0.0986, "bands": [52e-4] }, { "rms": 0.3575, "bands": [59e-4] }, { "rms": 0.3944, "bands": [55e-4] }, { "rms": 0.3878, "bands": [21e-4] }, { "rms": 0.3364, "bands": [46e-4] }, { "rms": 0.349, "bands": [67e-4] }, { "rms": 0.2821, "bands": [0.0153] }, { "rms": 0.2543, "bands": [99e-4] }, { "rms": 0.1664, "bands": [45e-4] }, { "rms": 0.2357, "bands": [5e-3] }, { "rms": 0.205, "bands": [19e-4] }, { "rms": 0.1561, "bands": [11e-4] }, { "rms": 0.0796, "bands": [14e-4] }, { "rms": 0.258, "bands": [39e-4] }, { "rms": 0.1919, "bands": [12e-4] }, { "rms": 0.1014, "bands": [3e-4] }, { "rms": 0.0722, "bands": [21e-4] }, { "rms": 0.3957, "bands": [41e-4] }, { "rms": 0.3083, "bands": [11e-4] }, { "rms": 0.2794, "bands": [2e-4] }, { "rms": 0.2918, "bands": [5e-4] }, { "rms": 0.1615, "bands": [5e-4] }, { "rms": 0.0729, "bands": [4e-4] }, { "rms": 0.0387, "bands": [8e-4] }, { "rms": 0.0273, "bands": [3e-4] }, { "rms": 0.1753, "bands": [7e-4] }, { "rms": 0.197, "bands": [11e-4] }, { "rms": 0.1275, "bands": [9e-4] }, { "rms": 0.109, "bands": [6e-4] }, { "rms": 0.2534, "bands": [18e-4] }, { "rms": 0.2909, "bands": [16e-4] }, { "rms": 0.2281, "bands": [7e-4] }, { "rms": 0.2036, "bands": [13e-4] }, { "rms": 0.1641, "bands": [8e-4] }, { "rms": 0.0953, "bands": [6e-4] }, { "rms": 0.0574, "bands": [7e-4] }, { "rms": 0.0482, "bands": [4e-4] }, { "rms": 0.1165, "bands": [27e-4] }, { "rms": 0.3346, "bands": [38e-4] }, { "rms": 0.2298, "bands": [1e-3] }, { "rms": 0.1897, "bands": [2e-4] }, { "rms": 0.1626, "bands": [4e-4] }, { "rms": 0.1091, "bands": [4e-4] }, { "rms": 0.0664, "bands": [4e-4] }, { "rms": 0.0611, "bands": [5e-4] }, { "rms": 0.0852, "bands": [6e-4] }, { "rms": 0.3252, "bands": [23e-4] }, { "rms": 0.2616, "bands": [6e-4] }, { "rms": 0.2501, "bands": [7e-4] }, { "rms": 0.2896, "bands": [43e-4] }, { "rms": 0.3482, "bands": [37e-4] }, { "rms": 0.2794, "bands": [15e-4] }, { "rms": 0.2281, "bands": [5e-4] }, { "rms": 0.2223, "bands": [6e-4] }, { "rms": 0.215, "bands": [7e-4] }, { "rms": 0.2103, "bands": [12e-4] }, { "rms": 0.1809, "bands": [3e-4] }, { "rms": 0.0449, "bands": [5e-4] }, { "rms": 0.2423, "bands": [13e-4] }, { "rms": 0.2589, "bands": [7e-4] }, { "rms": 0.2218, "bands": [6e-4] }, { "rms": 0.1942, "bands": [6e-4] }, { "rms": 0.1723, "bands": [3e-4] }, { "rms": 0.1075, "bands": [5e-4] }, { "rms": 0.0607, "bands": [2e-4] }, { "rms": 0.0958, "bands": [3e-4] }, { "rms": 0.2965, "bands": [23e-4] }, { "rms": 0.2308, "bands": [15e-4] }, { "rms": 0.1801, "bands": [9e-4] }, { "rms": 0.175, "bands": [8e-4] }, { "rms": 0.2593, "bands": [33e-4] }, { "rms": 0.2764, "bands": [16e-4] }, { "rms": 0.2275, "bands": [1e-3] }, { "rms": 0.2101, "bands": [12e-4] }, { "rms": 0.2646, "bands": [14e-4] }, { "rms": 0.2399, "bands": [17e-4] }, { "rms": 0.2124, "bands": [9e-4] }, { "rms": 0.133, "bands": [9e-4] }, { "rms": 0.2268, "bands": [44e-4] }, { "rms": 0.2474, "bands": [18e-4] }, { "rms": 0.183, "bands": [5e-4] }, { "rms": 0.1231, "bands": [8e-4] }, { "rms": 0.2574, "bands": [19e-4] }, { "rms": 0.3552, "bands": [22e-4] }, { "rms": 0.2929, "bands": [13e-4] }, { "rms": 0.232, "bands": [6e-4] }, { "rms": 0.1523, "bands": [3e-4] }, { "rms": 0.0684, "bands": [2e-4] }, { "rms": 0.0665, "bands": [3e-4] }, { "rms": 0.0559, "bands": [1e-4] }, { "rms": 0.0455, "bands": [24e-4] }, { "rms": 0.4056, "bands": [84e-4] }, { "rms": 0.3564, "bands": [35e-4] }, { "rms": 0.3198, "bands": [21e-4] }, { "rms": 0.2723, "bands": [77e-4] }, { "rms": 0.3248, "bands": [0.0103] }, { "rms": 0.2256, "bands": [13e-4] }, { "rms": 0.199, "bands": [9e-4] }, { "rms": 0.1814, "bands": [8e-4] }, { "rms": 0.1067, "bands": [7e-4] }, { "rms": 0.0486, "bands": [6e-4] }, { "rms": 0.0325, "bands": [4e-4] }, { "rms": 0.0374, "bands": [7e-4] }, { "rms": 0.2568, "bands": [4e-4] }, { "rms": 0.2632, "bands": [3e-4] }, { "rms": 0.2343, "bands": [3e-4] }, { "rms": 0.204, "bands": [2e-4] }, { "rms": 0.1482, "bands": [5e-4] }, { "rms": 0.1038, "bands": [6e-4] }, { "rms": 0.0737, "bands": [3e-4] }, { "rms": 0.0654, "bands": [13e-4] }, { "rms": 0.27, "bands": [35e-4] }, { "rms": 0.3181, "bands": [15e-4] }, { "rms": 0.2572, "bands": [14e-4] }, { "rms": 0.2011, "bands": [18e-4] }, { "rms": 0.3303, "bands": [37e-4] }, { "rms": 0.2841, "bands": [22e-4] }, { "rms": 0.2333, "bands": [15e-4] }, { "rms": 0.2205, "bands": [14e-4] }, { "rms": 0.218, "bands": [15e-4] }, { "rms": 0.2256, "bands": [16e-4] }, { "rms": 0.2196, "bands": [12e-4] }, { "rms": 0.1584, "bands": [4e-4] }, { "rms": 0.0826, "bands": [24e-4] }, { "rms": 0.3401, "bands": [23e-4] }, { "rms": 0.2593, "bands": [7e-4] }, { "rms": 0.2104, "bands": [12e-4] }, { "rms": 0.1754, "bands": [5e-4] }, { "rms": 0.1461, "bands": [4e-4] }, { "rms": 0.1285, "bands": [3e-4] }, { "rms": 0.1029, "bands": [3e-4] }, { "rms": 0.3344, "bands": [0.0533] }, { "rms": 0.736, "bands": [0.3998] }, { "rms": 0.6362, "bands": [0.9124] }, { "rms": 0.442, "bands": [0.7221] }, { "rms": 0.304, "bands": [0.2183] }, { "rms": 0.356, "bands": [0.0257] }, { "rms": 0.3705, "bands": [78e-4] }, { "rms": 0.369, "bands": [31e-4] }, { "rms": 0.2999, "bands": [3e-3] }, { "rms": 0.3075, "bands": [33e-4] }, { "rms": 0.2798, "bands": [47e-4] }, { "rms": 0.2517, "bands": [39e-4] }, { "rms": 0.2741, "bands": [3e-3] }, { "rms": 0.3381, "bands": [54e-4] }, { "rms": 0.2882, "bands": [41e-4] }, { "rms": 0.2697, "bands": [24e-4] }, { "rms": 0.269, "bands": [72e-4] }, { "rms": 0.6593, "bands": [0.2273] }, { "rms": 0.6407, "bands": [0.7457] }, { "rms": 0.465, "bands": [0.866] }, { "rms": 0.3269, "bands": [0.3938] }, { "rms": 0.2591, "bands": [0.0525] }, { "rms": 0.2158, "bands": [52e-4] }, { "rms": 0.2255, "bands": [16e-4] }, { "rms": 0.2313, "bands": [52e-4] }, { "rms": 0.2873, "bands": [54e-4] }, { "rms": 0.2678, "bands": [55e-4] }, { "rms": 0.227, "bands": [23e-4] }, { "rms": 0.214, "bands": [22e-4] }, { "rms": 0.3231, "bands": [38e-4] }, { "rms": 0.3229, "bands": [1e-3] }, { "rms": 0.2963, "bands": [34e-4] }, { "rms": 0.2893, "bands": [76e-4] }, { "rms": 0.52, "bands": [0.1196] }, { "rms": 0.7279, "bands": [0.5356] }, { "rms": 0.517, "bands": [1] }, { "rms": 0.3579, "bands": [0.5925] }, { "rms": 0.2535, "bands": [0.1019] }, { "rms": 0.3747, "bands": [0.0145] }, { "rms": 0.3851, "bands": [68e-4] }, { "rms": 0.3475, "bands": [19e-4] }, { "rms": 0.2918, "bands": [17e-4] }, { "rms": 0.2462, "bands": [24e-4] }, { "rms": 0.2493, "bands": [16e-4] }, { "rms": 0.2418, "bands": [25e-4] }, { "rms": 0.2515, "bands": [49e-4] }, { "rms": 0.3726, "bands": [32e-4] }, { "rms": 0.3111, "bands": [4e-3] }, { "rms": 0.3109, "bands": [45e-4] }, { "rms": 0.4065, "bands": [0.02] }, { "rms": 0.6156, "bands": [0.341] }, { "rms": 0.615, "bands": [0.8809] }, { "rms": 0.4714, "bands": [0.7625] }, { "rms": 0.2875, "bands": [0.2616] }, { "rms": 0.274, "bands": [0.0287] }, { "rms": 0.2745, "bands": [64e-4] }, { "rms": 0.2349, "bands": [36e-4] }, { "rms": 0.1918, "bands": [91e-4] }, { "rms": 0.3426, "bands": [94e-4] }, { "rms": 0.3708, "bands": [53e-4] }, { "rms": 0.3786, "bands": [13e-4] }, { "rms": 0.3866, "bands": [25e-4] }, { "rms": 0.3312, "bands": [35e-4] }, { "rms": 0.332, "bands": [15e-4] }, { "rms": 0.3298, "bands": [62e-4] }, { "rms": 0.3102, "bands": [73e-4] }, { "rms": 0.6511, "bands": [0.2048] }, { "rms": 0.6894, "bands": [0.7168] }, { "rms": 0.5253, "bands": [0.9225] }, { "rms": 0.3051, "bands": [0.4719] }, { "rms": 0.2962, "bands": [0.0766] }, { "rms": 0.3618, "bands": [0.0351] }, { "rms": 0.3154, "bands": [75e-4] }, { "rms": 0.3126, "bands": [3e-3] }, { "rms": 0.3209, "bands": [42e-4] }, { "rms": 0.2994, "bands": [13e-4] }, { "rms": 0.3068, "bands": [2e-3] }, { "rms": 0.2553, "bands": [19e-4] }, { "rms": 0.3159, "bands": [34e-4] }, { "rms": 0.3017, "bands": [17e-4] }, { "rms": 0.2862, "bands": [9e-4] }, { "rms": 0.2592, "bands": [16e-4] }, { "rms": 0.4564, "bands": [0.0767] }, { "rms": 0.6522, "bands": [0.4544] }, { "rms": 0.5586, "bands": [0.8953] }, { "rms": 0.423, "bands": [0.6034] }, { "rms": 0.2129, "bands": [0.129] }, { "rms": 0.1989, "bands": [0.0218] }, { "rms": 0.2092, "bands": [65e-4] }, { "rms": 0.202, "bands": [36e-4] }, { "rms": 0.1753, "bands": [33e-4] }, { "rms": 0.4588, "bands": [21e-4] }, { "rms": 0.4142, "bands": [37e-4] }, { "rms": 0.3917, "bands": [2e-3] }, { "rms": 0.3375, "bands": [5e-3] }, { "rms": 0.3787, "bands": [69e-4] }, { "rms": 0.3498, "bands": [31e-4] }, { "rms": 0.3225, "bands": [41e-4] }, { "rms": 0.329, "bands": [0.0215] }, { "rms": 0.6719, "bands": [0.3249] }, { "rms": 0.6527, "bands": [0.8638] }, { "rms": 0.4767, "bands": [0.8341] }, { "rms": 0.2615, "bands": [0.3151] }, { "rms": 0.3431, "bands": [0.0303] }, { "rms": 0.3501, "bands": [39e-4] }, { "rms": 0.329, "bands": [11e-4] }, { "rms": 0.2968, "bands": [9e-4] }, { "rms": 0.2735, "bands": [25e-4] }, { "rms": 0.2605, "bands": [24e-4] }, { "rms": 0.2707, "bands": [35e-4] }, { "rms": 0.2703, "bands": [18e-4] }, { "rms": 0.3254, "bands": [4e-3] }, { "rms": 0.3655, "bands": [34e-4] }, { "rms": 0.2799, "bands": [57e-4] }, { "rms": 0.2921, "bands": [78e-4] }, { "rms": 0.5633, "bands": [0.1297] }, { "rms": 0.66, "bands": [0.6211] }, { "rms": 0.5452, "bands": [0.9134] }, { "rms": 0.3512, "bands": [0.4787] }, { "rms": 0.2863, "bands": [0.0733] }, { "rms": 0.3058, "bands": [3e-3] }, { "rms": 0.3011, "bands": [17e-4] }, { "rms": 0.2364, "bands": [2e-3] }, { "rms": 0.2757, "bands": [78e-4] }, { "rms": 0.3266, "bands": [6e-3] }, { "rms": 0.324, "bands": [11e-4] }, { "rms": 0.3029, "bands": [18e-4] }, { "rms": 0.2776, "bands": [14e-4] }, { "rms": 0.2733, "bands": [33e-4] }, { "rms": 0.2749, "bands": [37e-4] }, { "rms": 0.2562, "bands": [26e-4] }, { "rms": 0.4228, "bands": [0.0692] }, { "rms": 0.6863, "bands": [0.4455] }, { "rms": 0.6215, "bands": [0.9061] }, { "rms": 0.4387, "bands": [0.661] }, { "rms": 0.319, "bands": [0.1863] }, { "rms": 0.3557, "bands": [97e-4] }, { "rms": 0.3552, "bands": [55e-4] }, { "rms": 0.3488, "bands": [27e-4] }, { "rms": 0.3087, "bands": [38e-4] }, { "rms": 0.3163, "bands": [47e-4] }, { "rms": 0.2602, "bands": [49e-4] }, { "rms": 0.271, "bands": [26e-4] }, { "rms": 0.2662, "bands": [31e-4] }, { "rms": 0.3298, "bands": [4e-3] }, { "rms": 0.2927, "bands": [28e-4] }, { "rms": 0.2654, "bands": [8e-4] }, { "rms": 0.2777, "bands": [0.0158] }, { "rms": 0.6676, "bands": [0.2444] }, { "rms": 0.6493, "bands": [0.8093] }, { "rms": 0.4791, "bands": [0.8536] }, { "rms": 0.3086, "bands": [0.3307] }, { "rms": 0.2272, "bands": [0.0366] }, { "rms": 0.2237, "bands": [79e-4] }, { "rms": 0.2302, "bands": [4e-3] }, { "rms": 0.225, "bands": [35e-4] }, { "rms": 0.2738, "bands": [49e-4] }, { "rms": 0.2569, "bands": [48e-4] }, { "rms": 0.2319, "bands": [2e-3] }, { "rms": 0.2332, "bands": [33e-4] }, { "rms": 0.3279, "bands": [53e-4] }, { "rms": 0.328, "bands": [29e-4] }, { "rms": 0.3059, "bands": [46e-4] }, { "rms": 0.281, "bands": [64e-4] }, { "rms": 0.5856, "bands": [0.1304] }, { "rms": 0.6894, "bands": [0.6013] }, { "rms": 0.5184, "bands": [0.9922] }, { "rms": 0.3376, "bands": [0.5495] }, { "rms": 0.2704, "bands": [0.0904] }, { "rms": 0.3073, "bands": [0.0198] }, { "rms": 0.29, "bands": [29e-4] }, { "rms": 0.2641, "bands": [29e-4] }, { "rms": 0.2387, "bands": [15e-4] }, { "rms": 0.2337, "bands": [28e-4] }, { "rms": 0.2187, "bands": [19e-4] }, { "rms": 0.2175, "bands": [43e-4] }, { "rms": 0.2345, "bands": [41e-4] }, { "rms": 0.3541, "bands": [39e-4] }, { "rms": 0.3091, "bands": [29e-4] }, { "rms": 0.3201, "bands": [38e-4] }, { "rms": 0.4343, "bands": [0.0484] }, { "rms": 0.6227, "bands": [0.3923] }, { "rms": 0.6273, "bands": [0.9048] }, { "rms": 0.4568, "bands": [0.722] }, { "rms": 0.2726, "bands": [0.215] }, { "rms": 0.2807, "bands": [0.0205] }, { "rms": 0.2895, "bands": [2e-3] }, { "rms": 0.2776, "bands": [21e-4] }, { "rms": 0.2529, "bands": [39e-4] }] };</script>
+    <style>
+      :root {
+        --ground: #0b1119;
+        --ink: #f1ebdd;
+        --muted: #a7a293;
+        --accent: #e5a94b;
+        --font-display: system-ui, sans-serif;
+        --font-code: ui-monospace, monospace;
+        --beat-glow: 0.2;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--ground);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        font-family: var(--font-display);
+        color: var(--ink);
+        overflow: hidden;
+        background:
+          radial-gradient(ellipse at 70% 48%, rgba(229, 169, 75, 0.1), transparent 38%),
+          radial-gradient(ellipse at 18% 82%, rgba(229, 169, 75, 0.055), transparent 33%),
+          var(--ground);
+      }
+      .grain-grid,
+      .ambient,
+      .camera,
+      .world {
+        position: absolute;
+        inset: 0;
+      }
+      .grain-grid {
+        z-index: 0;
+        opacity: 0.16;
+        background-image:
+          linear-gradient(rgba(241, 235, 221, 0.055) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(241, 235, 221, 0.055) 1px, transparent 1px);
+        background-size: 88px 88px;
+      }
+      .ambient {
+        z-index: 0;
+        pointer-events: none;
+        background: radial-gradient(ellipse at 70% 51%, rgba(229, 169, 75, 0.28), transparent 29%);
+        opacity: var(--beat-glow);
+      }
+      .camera {
+        z-index: 1;
+        perspective: 1500px;
+        overflow: hidden;
+      }
+      .world {
+        transform-style: preserve-3d;
+        transform-origin: 50% 50%;
+      }
+      .ghost-mark {
+        position: absolute;
+        right: 3.5%;
+        bottom: -5%;
+        color: rgba(241, 235, 221, 0.035);
+        font-size: 300px;
+        font-weight: 800;
+        letter-spacing: -0.09em;
+        line-height: 1;
+        pointer-events: none;
+        user-select: none;
+      }
+      .hero-stage {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        align-items: center;
+        pointer-events: none;
+        perspective: 1200px;
+        transform-style: preserve-3d;
+      }
+      .hero-object {
+        position: relative;
+        grid-column: 2;
+        justify-self: center;
+        width: 620px;
+        height: 620px;
+        transform-style: preserve-3d;
+        will-change: transform, opacity;
+      }
+      .morph-halo,
+      .morph-body {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      .morph-halo {
+        opacity: var(--beat-glow);
+        filter: blur(26px);
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .morph-body {
+        filter: drop-shadow(0 0 32px rgba(229, 169, 75, 0.26));
+      }
+      .orbit {
+        position: absolute;
+        inset: 8%;
+        border: 2px solid rgba(229, 169, 75, 0.35);
+        border-radius: 50%;
+        transform-style: preserve-3d;
+      }
+      .orbit-one {
+        transform: rotateX(68deg) rotateY(-14deg);
+      }
+      .orbit-two {
+        inset: 2%;
+        border-color: rgba(241, 235, 221, 0.18);
+        transform: rotateY(67deg) rotateX(17deg);
+      }
+      .orbit-three {
+        inset: 14%;
+        border-color: rgba(229, 169, 75, 0.25);
+        transform: rotateX(18deg) rotateY(22deg) rotateZ(52deg);
+      }
+      .beat {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: grid;
+        grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+        align-items: center;
+        padding: 108px 128px;
+        opacity: 0;
+        transform-style: preserve-3d;
+        pointer-events: none;
+      }
+      .beat-revision {
+        opacity: 1;
+      }
+      .copy {
+        grid-column: 1;
+        max-width: 840px;
+        position: relative;
+        z-index: 2;
+      }
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        color: var(--accent);
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+      .eyebrow::before {
+        display: block;
+        width: 52px;
+        height: 2px;
+        content: "";
+        background: var(--accent);
+        opacity: 0.8;
+      }
+      h1,
+      h2 {
+        margin-top: 34px;
+        color: var(--ink);
+        font-size: 86px;
+        font-weight: 760;
+        letter-spacing: -0.075em;
+        line-height: 0.98;
+      }
+      h1 span,
+      h2 span {
+        display: block;
+      }
+      .subline {
+        max-width: 710px;
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 29px;
+        line-height: 1.35;
+      }
+      .conversation {
+        display: grid;
+        gap: 14px;
+        max-width: 750px;
+        margin-top: 40px;
+      }
+      .turn {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        min-height: 74px;
+        padding: 16px 21px;
+        border: 1px solid rgba(241, 235, 221, 0.14);
+        border-radius: 8px;
+        background: rgba(22, 29, 38, 0.82);
+        color: var(--ink);
+        font-family: var(--font-code);
+        font-size: 28px;
+        line-height: 1.35;
+      }
+      .turn-tag {
+        flex: 0 0 auto;
+        color: var(--accent);
+        font-family: var(--font-display);
+        font-size: 18px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+      }
+      .turn-old {
+        color: #b9a98e;
+        text-decoration-color: rgba(229, 169, 75, 0.65);
+        text-decoration-line: line-through;
+      }
+      .turn-new {
+        border-color: rgba(229, 169, 75, 0.42);
+      }
+      .patch-line {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 14px 22px;
+        max-width: 760px;
+        margin-top: 42px;
+        padding: 30px 32px;
+        border: 1px solid rgba(229, 169, 75, 0.38);
+        border-radius: 8px;
+        background: rgba(16, 23, 31, 0.92);
+        box-shadow: 0 16px 64px rgba(0, 0, 0, 0.32);
+        font-family: var(--font-code);
+        font-size: 28px;
+        line-height: 1.45;
+      }
+      .patch-tag {
+        color: var(--accent);
+        font-weight: 750;
+      }
+      .patch-text {
+        color: var(--ink);
+      }
+      .patch-meta {
+        grid-column: 2;
+        color: var(--muted);
+        font-size: 28px;
+      }
+      .beat-pipeline {
+        grid-template-columns: 1fr;
+        align-content: center;
+        padding-top: 104px;
+        padding-bottom: 104px;
+      }
+      .beat-pipeline .copy {
+        max-width: none;
+      }
+      .beat-pipeline h2 {
+        margin-top: 24px;
+        font-size: 70px;
+      }
+      .stage-list {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 22px 34px;
+        max-width: 1480px;
+        margin-top: 58px;
+      }
+      .stage-node {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        min-height: 90px;
+        padding: 18px 20px;
+        border-top: 1px solid rgba(229, 169, 75, 0.48);
+        background: linear-gradient(90deg, rgba(229, 169, 75, 0.08), transparent 74%);
+      }
+      .stage-index {
+        color: var(--accent);
+        font-family: var(--font-code);
+        font-size: 28px;
+      }
+      .stage-name {
+        color: var(--ink);
+        font-size: 28px;
+        font-weight: 620;
+      }
+      .beat-proof {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
+        align-content: center;
+        padding-top: 92px;
+        padding-bottom: 88px;
+      }
+      .beat-proof .copy {
+        max-width: 1000px;
+      }
+      .beat-proof h2 {
+        margin-top: 22px;
+        font-size: 65px;
+      }
+      .proof-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 38px;
+        margin-top: 42px;
+      }
+      .proof-stat {
+        min-width: 0;
+        padding-top: 19px;
+        border-top: 2px solid var(--accent);
+      }
+      .proof-value {
+        display: block;
+        color: var(--accent);
+        font-size: 70px;
+        font-weight: 760;
+        letter-spacing: -0.07em;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .proof-label {
+        display: block;
+        margin-top: 14px;
+        color: var(--ink);
+        font-size: 28px;
+        line-height: 1.3;
+      }
+      .proof-budget {
+        margin-top: 24px;
+        color: var(--muted);
+        font-family: var(--font-code);
+        font-size: 28px;
+      }
+      .proof-note {
+        max-width: 980px;
+        margin-top: 26px;
+        color: #c4bdad;
+        font-size: 28px;
+        line-height: 1.4;
+      }
+      .install-line {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 27px;
+        padding: 15px 20px;
+        border: 1px solid rgba(229, 169, 75, 0.48);
+        border-radius: 6px;
+        color: var(--ink);
+        background: rgba(229, 169, 75, 0.08);
+        font-family: var(--font-code);
+        font-size: 28px;
+      }
+      .install-prompt {
+        color: var(--accent);
+      }
+      .beat-proof .hero-stage {
+        opacity: 0.6;
+      }
+      .data-mark {
+        color: var(--muted);
+        font-family: var(--font-code);
+        font-size: 17px;
+        letter-spacing: 0.08em;
+      }
+      @media (max-width: 1500px) {
+        .beat {
+          padding-right: 88px;
+          padding-left: 88px;
+        }
+        h1 {
+          font-size: 74px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  
+<script data-hyperframes-preview-runtime="1" src="/api/runtime.js"></script>
+<meta name="hyperframes-project-signature" content="9dd3e7ce6b00e0b54dfd7d9c">
+</head>
+  <body>
+    <div data-hf-id="hf-kbh8" id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1920" data-height="1080">
+      <div data-hf-id="hf-xj8r" class="grain-grid" data-layout-ignore=""></div>
+      <div data-hf-id="hf-ij6x" class="ambient" data-layout-ignore=""></div>
+      <div data-hf-id="hf-g4sl" class="camera">
+        <div data-hf-id="hf-e6wx" class="world" id="world" data-layout-allow-overflow="">
+          <div data-hf-id="hf-nep2" class="ghost-mark" data-layout-ignore="">DSPM</div>
+          <div data-hf-id="hf-h2p5" class="hero-stage">
+            <div data-hf-id="hf-3rju" class="hero-object" id="hero-object">
+              <div data-hf-id="hf-5qq7" class="orbit orbit-one"></div>
+              <div data-hf-id="hf-ns8d" class="orbit orbit-two"></div>
+              <div data-hf-id="hf-cein" class="orbit orbit-three"></div>
+              <svg data-hf-id="hf-dup6" class="morph-halo" viewBox="0 0 720 720" aria-hidden="true">
+                <path data-hf-id="hf-9e0p" id="shape-halo" />
+              </svg>
+              <svg data-hf-id="hf-xxps" class="morph-body" viewBox="0 0 720 720" aria-hidden="true">
+                <defs data-hf-id="hf-mh0t">
+                  <radialgradient data-hf-id="hf-n0yj" id="shape-fill" cx="38%" cy="34%" r="68%">
+                    <stop data-hf-id="hf-cstg" offset="0%" stop-color="#f8d994" stop-opacity="0.55" />
+                    <stop data-hf-id="hf-0uh9" offset="52%" stop-color="#e5a94b" stop-opacity="0.2" />
+                    <stop data-hf-id="hf-abvz" offset="100%" stop-color="#9c6426" stop-opacity="0.06" />
+                  </radialgradient>
+                </defs>
+                <path data-hf-svg-reference-aliases="[{&quot;name&quot;:&quot;fill&quot;,&quot;localName&quot;:&quot;fill&quot;,&quot;namespaceURI&quot;:null,&quot;before&quot;:&quot;url(#shape-fill)&quot;,&quot;after&quot;:&quot;url(#shape-fill)&quot;}]" data-hf-id="hf-jklm" id="shape-face" fill="url(#shape-fill)" />
+              </svg>
+            </div>
+          </div>
+
+          <section data-hf-id="hf-i8yy" class="beat beat-revision" id="beat-revision">
+            <div data-hf-id="hf-vjd8" class="copy" id="revision-copy">
+              <p data-hf-id="hf-73nr" class="eyebrow">DSPM / REVISION MEMORY</p>
+              <h1 data-hf-id="hf-m3fm"><span data-hf-id="hf-8ffi">THE RULE</span><span data-hf-id="hf-oddv">CHANGED.</span></h1>
+              <p data-hf-id="hf-v0tm" class="subline">The limit changed. Its revision stays.</p>
+              <div data-hf-id="hf-j01h" class="conversation">
+                <div data-hf-id="hf-4dey" class="turn turn-old">
+                  <span data-hf-id="hf-fo0l" class="turn-tag" data-layout-ignore="">USER</span>
+                  <span data-hf-id="hf-v10l">Webhook timeout: 30 seconds</span>
+                </div>
+                <div data-hf-id="hf-lzbn" class="turn turn-new">
+                  <span data-hf-id="hf-jr9n" class="turn-tag" data-layout-ignore="">UPDATE</span>
+                  <span data-hf-id="hf-8qvm">Timeout: 10 seconds</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section data-hf-id="hf-072i" class="beat beat-patch" id="beat-patch">
+            <div data-hf-id="hf-bdx3" class="copy">
+              <p data-hf-id="hf-xilm" class="eyebrow">TYPED SEMANTIC PATCH</p>
+              <h2 data-hf-id="hf-2l5r"><span data-hf-id="hf-3uwf">KEEP THE</span><span data-hf-id="hf-hn7y">REVISION.</span></h2>
+              <div data-hf-id="hf-kijl" class="patch-line">
+                <span data-hf-id="hf-y1bk" class="patch-tag">[DEC]</span>
+                <span data-hf-id="hf-64az" class="patch-text">webhook timeout: 10 (was 30)</span>
+                <span data-hf-id="hf-bpw6" class="patch-meta">current value + revision lineage</span>
+              </div>
+            </div>
+          </section>
+
+          <section data-hf-id="hf-v1bs" class="beat beat-pipeline" id="beat-pipeline">
+            <div data-hf-id="hf-r8s7" class="copy">
+              <p data-hf-id="hf-icpt" class="eyebrow">SIX-STAGE COMPRESSION PIPELINE</p>
+              <h2 data-hf-id="hf-iua6">STRUCTURE THAT SURVIVES THE BUDGET.</h2>
+              <div data-hf-id="hf-y47b" class="stage-list">
+                <div data-hf-id="hf-ph0j" class="stage-node"><span data-hf-id="hf-33q5" class="stage-index">01</span><span data-hf-id="hf-zorl" class="stage-name">Dedup</span></div>
+                <div data-hf-id="hf-8g9v" class="stage-node"><span data-hf-id="hf-4an8" class="stage-index">02</span><span data-hf-id="hf-ptud" class="stage-name">Slot fusion</span></div>
+                <div data-hf-id="hf-81yu" class="stage-node"><span data-hf-id="hf-3wc7" class="stage-index">03</span><span data-hf-id="hf-kof8" class="stage-name">Delta encoding</span></div>
+                <div data-hf-id="hf-7nnt" class="stage-node"><span data-hf-id="hf-539a" class="stage-index">04</span><span data-hf-id="hf-2k1t" class="stage-name">Causal pruning</span></div>
+                <div data-hf-id="hf-79cs" class="stage-node"><span data-hf-id="hf-4oy9" class="stage-index">05</span><span data-hf-id="hf-whsg" class="stage-name">Utility scoring</span></div>
+                <div data-hf-id="hf-6v1r" class="stage-node"><span data-hf-id="hf-5vvc" class="stage-index">06</span><span data-hf-id="hf-ppep" class="stage-name">Shadow selection</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section data-hf-id="hf-mc6u" class="beat beat-proof" id="beat-proof">
+            <div data-hf-id="hf-quh6" class="copy">
+              <p data-hf-id="hf-9ehy" class="eyebrow">BENCHMARK / 250-TOKEN BUDGET</p>
+              <h2 data-hf-id="hf-gavz"><span data-hf-id="hf-zpkj">LESS CONTEXT.</span><span data-hf-id="hf-69g0">CRITICALS SELECTED.</span></h2>
+              <div data-hf-id="hf-l6cg" class="proof-stats">
+                <div data-hf-id="hf-ov35" class="proof-stat">
+                  <strong data-hf-id="hf-r7lz" class="proof-value">82.8%</strong>
+                  <span data-hf-id="hf-kt0c" class="proof-label">token reduction</span>
+                </div>
+                <div data-hf-id="hf-qyd1" class="proof-stat">
+                  <strong data-hf-id="hf-tcne" class="proof-value">100%</strong>
+                  <span data-hf-id="hf-xus1" class="proof-label">critical patches selected into context</span>
+                </div>
+              </div>
+              <p data-hf-id="hf-dy0n" class="proof-budget">7 domains x 40 turns</p>
+              <p data-hf-id="hf-mjfv" class="proof-note">Same model family extracted and judged; not independently replicated.</p>
+              <p data-hf-id="hf-dnph" class="install-line" id="install-line"><span data-hf-id="hf-3n5f" class="install-prompt">$</span><span data-hf-id="hf-ceub">pip install dspm-memory</span></p>
+            </div>
+          </section>
+        </div>
+      </div>
+      <audio data-hf-render-id="music-bed" data-hf-id="hf-7uy4" id="music-bed" src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3" data-start="0" data-duration="15" data-track-index="10" data-volume="0.18" data-automation="{&quot;version&quot;:1,&quot;lanes&quot;:[{&quot;target&quot;:&quot;volume&quot;,&quot;points&quot;:[{&quot;t&quot;:0,&quot;v&quot;:0},{&quot;t&quot;:0.8,&quot;v&quot;:0.18},{&quot;t&quot;:14.1,&quot;v&quot;:0.18},{&quot;t&quot;:15,&quot;v&quot;:0}]}]}" data-end="15"></audio>
+      <audio data-hf-render-id="pipeline-hit" data-hf-id="hf-vbj3" id="pipeline-hit" src="assets/sfx/impact/impactSoft_medium_001.ogg" data-start="8.7423" data-duration="0.18" data-track-index="11" data-volume="0.3" data-end="8.9223"></audio>
+      <audio data-hf-render-id="final-bell" data-hf-id="hf-hw3v" id="final-bell" src="assets/sfx/interface/bong_001.ogg" data-start="13.1077" data-duration="0.12" data-track-index="12" data-volume="0.22" data-end="13.227699999999999"></audio>
+    </div>
+    
+  <script type="text/hf-after-fonts">const root = document.querySelector('[data-composition-id="main"]');
+const world = document.getElementById("world");
+const shapeFace = document.getElementById("shape-face");
+const shapeHalo = document.getElementById("shape-halo");
+const tl = gsap.timeline({ paused: true });
+gsap.set(world, { x: -18, y: 8, z: -110, rotationX: 5, rotationY: -8 });
+const shapeStates = [
+  { amplitude: 0.015, lobes: 2, phase: 0 },
+  { amplitude: 0.18, lobes: 4, phase: 0.18 },
+  { amplitude: 0.15, lobes: 6, phase: -0.1 },
+  { amplitude: 0.055, lobes: 3, phase: 0.2 }
+];
+const morph = { progress: 0 };
+function drawMorph() {
+  const index = Math.min(2, Math.floor(morph.progress));
+  const amount = morph.progress - index;
+  const a = shapeStates[index];
+  const b = shapeStates[index + 1];
+  const amplitude = a.amplitude + (b.amplitude - a.amplitude) * amount;
+  const lobes = a.lobes + (b.lobes - a.lobes) * amount;
+  const phase = a.phase + (b.phase - a.phase) * amount;
+  const points = [];
+  for (let i = 0; i <= 96; i += 1) {
+    const angle = Math.PI * 2 * i / 96;
+    const radius = 218 * (1 + amplitude * Math.cos(lobes * angle + phase));
+    const x = 360 + Math.cos(angle) * radius;
+    const y = 360 + Math.sin(angle) * radius;
+    points.push(`${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`);
+  }
+  const path = `${points.join(" ")} Z`;
+  shapeFace.setAttribute("d", path);
+  shapeHalo.setAttribute("d", path);
+}
+drawMorph();
+tl.to(world, {
+  x: 22,
+  y: -8,
+  z: -6,
+  rotationX: 1,
+  rotationY: 5,
+  duration: 3.1,
+  ease: "power2.inOut"
+}, 0);
+tl.to(world, {
+  x: -28,
+  y: 4,
+  z: 92,
+  rotationX: -4,
+  rotationY: -5,
+  duration: 3.2,
+  ease: "power2.inOut"
+}, 3.1);
+tl.to(world, {
+  x: 48,
+  y: 8,
+  z: -74,
+  rotationX: 4,
+  rotationY: 7,
+  duration: 4.2,
+  ease: "power2.inOut"
+}, 6.3);
+tl.to(world, {
+  x: 0,
+  y: 0,
+  z: 8,
+  rotationX: 0,
+  rotationY: 0,
+  duration: 4.5,
+  ease: "power2.inOut"
+}, 10.5);
+tl.to(morph, { progress: 3, duration: 14.2, ease: "sine.inOut", onUpdate: drawMorph }, 0);
+tl.fromTo("#hero-object", {
+  rotationX: -10,
+  rotationY: 16,
+  rotationZ: -8,
+  scale: 0.9,
+  opacity: 0.9
+}, {
+  rotationX: 8,
+  rotationY: 372,
+  rotationZ: 68,
+  scale: 1,
+  opacity: 0.86,
+  duration: 14.7,
+  ease: "none"
+}, 0);
+tl.fromTo("#revision-copy .eyebrow", { x: -40 }, { x: 0, duration: 0.45, ease: "power3.out" }, 0.16);
+tl.fromTo("#revision-copy h1", { x: -72, rotationY: 8 }, { x: 0, rotationY: 0, duration: 0.65, ease: "power3.out" }, 0.34);
+tl.fromTo(".subline", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }, 0.78);
+tl.fromTo(".turn-old", { x: -56, opacity: 0 }, { x: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 0.38);
+tl.fromTo(".turn-new", { x: 72, rotationY: -10, opacity: 0 }, { x: 0, rotationY: 0, opacity: 1, duration: 0.48, ease: "power3.out" }, 0.82);
+tl.to("#beat-revision", { opacity: 0, duration: 0.35, ease: "power2.in" }, 3.25);
+tl.fromTo("#beat-patch", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 3.38);
+tl.fromTo("#beat-patch .eyebrow", { x: -42, opacity: 0 }, { x: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 3.56);
+tl.fromTo("#beat-patch h2", { y: 44, rotationX: -7, opacity: 0 }, { y: 0, rotationX: 0, opacity: 1, duration: 0.58, ease: "power3.out" }, 3.78);
+tl.fromTo(".patch-line", { x: -36, rotationY: 5, opacity: 0 }, { x: 0, rotationY: 0, opacity: 1, duration: 0.58, ease: "power3.out" }, 4.1);
+tl.to("#beat-patch", { opacity: 0, duration: 0.38, ease: "power2.in" }, 6.52);
+tl.fromTo("#beat-pipeline", { opacity: 0 }, { opacity: 1, duration: 0.42, ease: "power2.out" }, 6.66);
+tl.fromTo("#beat-pipeline .eyebrow", { y: 22, opacity: 0 }, { y: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 6.9);
+tl.fromTo("#beat-pipeline h2", { x: -46, opacity: 0 }, { x: 0, opacity: 1, duration: 0.52, ease: "power3.out" }, 7.12);
+tl.fromTo(".stage-node", { y: 28, opacity: 0 }, { y: 0, opacity: 1, duration: 0.44, stagger: 0.07, ease: "power2.out" }, 7.45);
+tl.to(shapeHalo, { scale: 1.12, duration: 0.24, ease: "power2.out" }, 8.7423);
+tl.to(shapeHalo, { scale: 1, duration: 0.42, ease: "power2.inOut" }, 8.9823);
+tl.to("#beat-pipeline", { opacity: 0, duration: 0.38, ease: "power2.in" }, 10.45);
+tl.fromTo("#beat-proof", { opacity: 0 }, { opacity: 1, duration: 0.42, ease: "power2.out" }, 10.62);
+tl.fromTo("#beat-proof .eyebrow", { x: -36, opacity: 0 }, { x: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 10.85);
+tl.fromTo("#beat-proof h2", { y: 34, opacity: 0 }, { y: 0, opacity: 1, duration: 0.54, ease: "power3.out" }, 11.05);
+tl.fromTo(".proof-stat", { y: 36, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, stagger: 0.18, ease: "power3.out" }, 11.55);
+tl.fromTo(".proof-budget", { opacity: 0 }, { opacity: 1, duration: 0.32, ease: "power2.out" }, 12.15);
+tl.fromTo(".proof-note", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 12.2);
+tl.fromTo("#install-line", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "power3.out" }, 12.8);
+const audioData = window.DSPM_AUDIO_DATA;
+if (audioData && audioData.fps === 30) {
+  for (let frame = 0; frame < audioData.totalFrames; frame += 1) {
+    const sample = audioData.frames[frame];
+    tl.call(() => {
+      const level = 0.16 + sample.rms * 0.12 + (sample.bands[0] || 0) * 0.035;
+      root.style.setProperty("--beat-glow", level.toFixed(3));
+    }, [], frame / audioData.fps);
+  }
+}
+window.__timelines["main"] = tl;</script></body>
+</html>

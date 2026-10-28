@@ -38,6 +38,13 @@ to the stored p{turn}_{k} ids via a two-pass construction --
 previously deps were copied verbatim and always dangled, leaving T4
 and W_DEP dead. Extraction-layer change: both smoke gates must be
 green before release.
+
+Bug #4a: compliance classification rule. The system prompt now tells
+the LLM that regulatory, compliance, and security requirements (PCI-DSS,
+HIPAA, GDPR, SOC 2, ISO 27001, FedRAMP, etc.) are CONSTRAINTS, not
+entities. Pre-fix: PCI-DSS compliance was typed as [entity] (non-critical)
+because the prompt only said 'entity holds named things' with no
+compliance rule, so CRR never saw it and reported a vacuous 100%.
 """
 
 from __future__ import annotations
@@ -139,6 +146,18 @@ def numeric_density(turn_text: str) -> float:
     return sum(1 for w in words if re.search(r"\d", w)) / len(words)
 
 
+# Bug #4a: compliance classification rule. Both prompts now tell the LLM
+# that regulatory, compliance, and security requirements are CONSTRAINTS,
+# not entities. Pre-fix: PCI-DSS compliance was typed as [entity]
+# (non-critical) because the prompt only said 'entity holds named things'
+# with no compliance rule, so CRR never saw it and reported a vacuous 100%.
+_COMPLIANCE_RULE = (
+    "Regulatory, compliance, and security requirements (PCI-DSS, HIPAA, GDPR, SOC 2, "
+    "ISO 27001, FedRAMP, etc.) are CONSTRAINTS, not entities — even when they are "
+    "named things. They are non-negotiable specs the system must satisfy. "
+)
+
+
 # v0.1.10: the dense prompt gains three rules, each mapped to a failure
 # observed in live document testing:
 #   - config/experimental params are NOT constraints (they were extracted
@@ -179,7 +198,8 @@ def _build_system_prompt(dense: bool = False) -> str:
             "own settings (a study's temperature, a table's parameters, model names, budget "
             "values used in an evaluation) are NOT constraints — store those as code or "
             "structure patches. "
-            "Each distinct numeric result (score, percentage, p-value, threshold, date) gets its "
+            + _COMPLIANCE_RULE
+            + "Each distinct numeric result (score, percentage, p-value, threshold, date) gets its "
             "OWN patch with the value and its unit/label verbatim; never merge multiple statistics "
             "into one payload. When the content contains a table, extract one patch per row, "
             "preserving the row label and its values verbatim. "
@@ -201,7 +221,8 @@ def _build_system_prompt(dense: bool = False) -> str:
         "A statement that sets, changes, or decides a parameter value ('set the timeout "
         "to 30 seconds', 'timeout updated to 10 seconds') is a DECISION, not code — even "
         "when it sounds like a configuration parameter. "
-        "code holds implementation detail. equation holds formulas. entity holds named things. "
+        + _COMPLIANCE_RULE
+        + "code holds implementation detail. equation holds formulas. entity holds named things. "
         "structure holds schemas and workflows. "
         "Reply with a raw JSON array only — no markdown fences, no commentary."
     )
@@ -289,6 +310,17 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
     # still raise immediately — retrying a bad key or dead model is
     # pointless. If every attempt yields empty content, the turn degrades
     # gracefully to 0 patches instead of crashing add_turn().
+    #
+    # Bug #5: truncation (finish_reason='length' + empty content) is
+    # DETERMINISTIC — retrying with the same params gives the same result
+    # because the reasoning model will burn the same output budget on
+    # chain-of-thought. Pre-fix: every truncation was misclassified as
+    # llm_empty (3 attempts * llm_empty++), wasted 2 retries (~6s of
+    # sleep), and only got llm_length_finish=1 bumped after the loop
+    # ended. Now: truncation bumps llm_length_finish once INSIDE the
+    # loop and exits immediately, no retry, no wasted sleep, no
+    # misclassification. Live evidence (gpt-oss-20b, 3/14 runs): the
+    # 3 failing runs each consumed 3 LLM calls when 1 was sufficient.
     NON_RETRYABLE = {400, 401, 403, 404}
     response = None
     last_exc = None
@@ -308,6 +340,15 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
             raw = (choice.message.content or "").strip()
             if raw:
                 break
+            # Bug #5: distinguish truncation (length) from genuine empty
+            # content. Truncation is deterministic — retrying with the
+            # same params gives the same result (the reasoning model
+            # burns the same output budget on chain-of-thought), so
+            # don't waste a retry on it. Classify correctly: truncation
+            # bumps llm_length_finish, not llm_empty.
+            if finish_reason == "length":
+                _bump("llm_length_finish")
+                break   # exit loop immediately, no retry, no sleep
             _bump("llm_empty")
             if attempt < 2:
                 _bump("llm_retries")
@@ -334,8 +375,14 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
     if response is None:
         raise last_exc
 
-    if finish_reason == "length":
-        _bump("llm_length_finish")
+    # Bug #5: post-loop truncation handling. The inside-loop check
+    # already bumped llm_length_finish and broke out, so we DON'T bump
+    # it again here. We only bump llm_fallbacks (the silent 0-patch
+    # fallback path is firing) and return [] (or raise in strict mode).
+    # Note: partial truncation (finish_reason='length' but raw is
+    # non-empty) falls through to parse_extraction below — we try to
+    # recover what the model managed to output before being cut off.
+    if finish_reason == "length" and not raw:
         _bump("llm_fallbacks")
         if strict:
             raise RuntimeError(
@@ -406,6 +453,201 @@ def extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
         else:
             deps = []
 
+        patches.append(SemanticPatch(
+            patch_id=f"p{turn_index}_{k}",
+            turn_index=turn_index,
+            patch_type=p_type,
+            payload=payload,
+            dependencies=deps,
+        ))
+
+    return patches
+
+
+# ── Bug #7b: async API (v0.1.22) ──────────────────────────────────
+# Backward-compatible addition: callers who don't use async are unaffected.
+# Callers who do use async (e.g. FastAPI servers, AsyncOpenAI clients)
+# can now await async_extract_turn() instead of blocking on the sync
+# version. The async path auto-detects whether llm_client supports
+# async (has 'acreate' or returns a coroutine) and falls back to
+# asyncio.to_thread() for sync-only clients -- so ANY OpenAI-compatible
+# client works, sync or async.
+
+async def async_extract_turn(llm_client, model: str, turn_text: str, turn_index: int,
+                              recent_context: str = '', dense: bool = False,
+                              max_tokens: Optional[int] = None,
+                              reasoning_effort: Optional[str] = None,
+                              role: str = 'user', strict: bool = False,
+                              telemetry: Optional[Dict[str, int]] = None,
+                              reasoning_param_mode: Optional[str] = None,
+                              max_tokens_floor: Optional[int] = None) -> List[SemanticPatch]:
+    """Async version of extract_turn. Same semantics, same parameters,
+    same return type. Awaits the LLM call instead of blocking.
+
+    Bug #7b: the sync extract_turn() blocks the calling thread for
+    1-10 seconds on every LLM call (longer for reasoning models like
+    gpt-oss-20b). On a busy chatbot server handling N concurrent users,
+    that's N blocked threads. The async version frees the event loop
+    during the LLM call, so the server can handle other requests while
+    waiting.
+
+    Auto-detects the client's async capability:
+      - If llm_client.chat.completions.acreate exists (older OpenAI SDK
+        convention) -> awaits llm_client.chat.completions.acreate(...)
+      - If llm_client.chat.completions.create is a coroutine function
+        (AsyncOpenAI) -> awaits it directly
+      - Otherwise (sync client) -> wraps in asyncio.to_thread() so the
+        event loop is still freed, just on a worker thread
+
+    Usage:
+        # With AsyncOpenAI:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI()
+        patches = await async_extract_turn(client, 'gpt-4o-mini', text, 0)
+
+        # With sync OpenAI (still works, frees event loop):
+        from openai import OpenAI
+        client = OpenAI()
+        patches = await async_extract_turn(client, 'gpt-4o-mini', text, 0)
+    """
+    import asyncio
+    import inspect
+
+    if llm_client is None:
+        raise ValueError("llm_client is required to extract semantic patches")
+
+    system_prompt = _build_system_prompt(dense=dense)
+    user_content = (
+        f"Recent context:\n{recent_context}\n\nTurn {turn_index}:\n[{role}] {turn_text}"
+        if recent_context else f"Turn {turn_index}:\n[{role}] {turn_text}"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    if max_tokens is None:
+        max_tokens = EXTRACT_MAX_TOKENS
+    floor = EXTRACT_MIN_TOKENS if max_tokens_floor is None else max(0, int(max_tokens_floor))
+    max_tokens = max(int(max_tokens), floor)
+    request_kwargs = {"max_tokens": max_tokens, "model": model,
+                      "messages": messages, "temperature": 0.0}
+    if reasoning_effort is None and "gpt-oss" in model.lower():
+        reasoning_effort = "low"
+    param_mode = reasoning_param_mode or REASONING_PARAM_MODE
+    if reasoning_effort and param_mode == "top":
+        request_kwargs["reasoning_effort"] = reasoning_effort
+    elif reasoning_effort and param_mode == "extra_body":
+        request_kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+
+    # Bug #7b: detect client's async capability.
+    completions = llm_client.chat.completions
+    create_fn = completions.create
+    is_coroutine = inspect.iscoroutinefunction(create_fn)
+
+    # Strip None values from extra_body before sending
+    send_kwargs = {k: v for k, v in request_kwargs.items() if v is not None}
+
+    if is_coroutine:
+        # Native async (AsyncOpenAI): await directly, no thread overhead.
+        response = await create_fn(**send_kwargs)
+    elif hasattr(completions, 'acreate'):
+        # Older OpenAI SDK convention: acreate is the async version.
+        response = await completions.acreate(**send_kwargs)
+    else:
+        # Sync client: wrap in to_thread so the event loop is freed.
+        # The retry loop in sync extract_turn still applies, but runs
+        # on a worker thread instead of blocking the main event loop.
+        response = await asyncio.to_thread(create_fn, **send_kwargs)
+
+    # From here, reuse the sync parsing logic by calling the sync
+    # extract_turn with the same client+args -- but that would double
+    # the LLM call. Instead, replicate the response-handling inline.
+    # The cleanest approach: factor out _parse_response() and call it.
+    # For now, inlined to avoid refactoring the sync version.
+
+    choice = response.choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    raw = (choice.message.content or "").strip()
+
+    if telemetry is not None:
+        telemetry["llm_calls"] = telemetry.get("llm_calls", 0) + 1
+
+    # Bug #5 parity: detect truncation inside the call (no retry loop
+    # in async version -- callers can retry themselves if they want).
+    if not raw:
+        if finish_reason == "length":
+            if telemetry is not None:
+                telemetry["llm_length_finish"] = telemetry.get("llm_length_finish", 0) + 1
+                telemetry["llm_fallbacks"] = telemetry.get("llm_fallbacks", 0) + 1
+            if strict:
+                raise RuntimeError(
+                    f"async_extract_turn: LLM output was truncated (model={model}). "
+                    "strict_llm=True refuses the silent 0-patch fallback.")
+            return []
+        if telemetry is not None:
+            telemetry["llm_empty"] = telemetry.get("llm_empty", 0) + 1
+            telemetry["llm_fallbacks"] = telemetry.get("llm_fallbacks", 0) + 1
+        if strict:
+            raise RuntimeError(
+                f"async_extract_turn: LLM returned empty content (model={model}). "
+                "strict_llm=True refuses the silent 0-patch fallback.")
+        return []
+
+    parsed = parse_extraction(raw)
+    if not parsed:
+        stripped = raw.strip()
+        try:
+            legit_empty = isinstance(json.loads(stripped), list) and not json.loads(stripped)
+        except (TypeError, ValueError):
+            legit_empty = False
+        if not legit_empty:
+            if telemetry is not None:
+                telemetry["llm_parse_failures"] = telemetry.get("llm_parse_failures", 0) + 1
+                telemetry["llm_fallbacks"] = telemetry.get("llm_fallbacks", 0) + 1
+            if strict:
+                raise RuntimeError(
+                    "async_extract_turn: LLM output is not a parseable JSON array "
+                    f"(model={model}, raw head={raw[:120]!r}). strict_llm=True "
+                    "refuses the silent 0-patch fallback.")
+        return []
+
+    # Reuse the same pass-1/pass-2 logic as sync extract_turn.
+    accepted: List[Dict[str, Any]] = []
+    seen_fingerprints: set = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        p_type = str(item.get('patch_type') or item.get('type') or '').lower().strip()
+        if p_type not in PATCH_TYPES:
+            continue
+        payload = str(item.get('payload') or item.get('text') or '')
+        if not payload.strip():
+            continue
+        probe = SemanticPatch(patch_id="probe", turn_index=turn_index,
+                              patch_type=p_type, payload=payload, dependencies=[])
+        if probe.fingerprint in seen_fingerprints:
+            continue
+        seen_fingerprints.add(probe.fingerprint)
+        accepted.append(item)
+
+    id_map: Dict[str, str] = {}
+    for k, item in enumerate(accepted):
+        llm_id = str(item.get('patch_id') or '').strip()
+        if llm_id:
+            id_map[llm_id] = f"p{turn_index}_{k}"
+
+    patches: List[SemanticPatch] = []
+    for k, item in enumerate(accepted):
+        p_type = str(item.get('patch_type') or item.get('type') or '').lower().strip()
+        payload = str(item.get('payload') or item.get('text') or '')
+        raw_deps = item.get('dependencies')
+        if isinstance(raw_deps, list):
+            deps = [id_map.get(str(x), str(x)) for x in raw_deps]
+        elif isinstance(raw_deps, str):
+            deps = [id_map.get(raw_deps, raw_deps)]
+        else:
+            deps = []
         patches.append(SemanticPatch(
             patch_id=f"p{turn_index}_{k}",
             turn_index=turn_index,

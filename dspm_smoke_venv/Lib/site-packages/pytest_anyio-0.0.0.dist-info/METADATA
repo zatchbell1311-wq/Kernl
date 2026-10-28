@@ -1,0 +1,10 @@
+Metadata-Version: 2.1
+Name: pytest-anyio
+Version: 0.0.0
+Summary: The pytest anyio plugin is built into anyio. You don't need this package.
+Home-page: https://github.com/graingert/pytest-anyio
+Author: Thomas Grainger
+Author-email: pytest-anyio@graingert.co.uk
+Classifier: License :: OSI Approved :: MIT License
+Requires-Dist: anyio
+Requires-Dist: pytest
