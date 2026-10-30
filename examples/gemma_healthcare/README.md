@@ -10,13 +10,14 @@ Gemma model via vLLM.
 
 ## Setup
 
-\\ash
-# Start vLLM with Gemma (Piotr - confirm exact model tag in your PR)
-vllm serve <your-gemma-model-tag> --max-model-len 8192
+Start vLLM with Gemma (Piotr - confirm exact model tag in your PR):
 
-# Install DSPM
-pip install dspm-memory
-\
+    vllm serve <your-gemma-model-tag> --max-model-len 8192
+
+Install DSPM:
+
+    pip install dspm-memory
+
 ## Run
 
 Add your run_test.py here (Piotr's PR).
