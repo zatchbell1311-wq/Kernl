@@ -1,10 +1,9 @@
 # DSPM — memory for LLM conversations that keeps your constraints
+**Dynamic Semantic Patch Memory**, by Dhruv Dubey · Python package: `dspm-memory` · Repo: Kernl
 
-Dynamic Semantic Patch Memory, by Dhruv Dubey · Python package: `dspm-memory` · Repo: [Kernl](https://github.com/zatchbell1311-wq/Kernl)
-
-[![PyPI version](https://badge.fury.io/py/dspm-memory.svg)](https://badge.fury.io/py/dspm-memory)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/dspm-memory)](https://pypi.org/project/dspm-memory/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 
 ```bash
 pip install dspm-memory
@@ -12,22 +11,40 @@ pip install dspm-memory
 
 Long chats drop the rule from turn 3 that everything else depends on. DSPM turns each turn into typed patches, protects constraints, decisions and revised values, and renders them under a fixed token budget. Training-free: no fine-tuning, just prompts and Python rules. Works with any OpenAI-compatible endpoint.
 
----
+## Headline numbers (v0.2.2, verified on live data)
 
-## Headline numbers (v0.2.1, verified on live data)
-
-24-turn fintech conversation, 648 raw tokens, 3 revisions tracked (JWT 15→30min, S3 1h→15min, CPU 70→60%), real Groq LLM:
+24-turn fintech conversation, 648 raw tokens, 3 revisions tracked (JWT 15→30min, S3 1h→15min, CPU 70%→60%), real Groq LLM:
 
 | Budget | CRR | TRR | Context tokens |
 |--------|-----|-----|----------------|
-| 60 | **100%** | 93.1% | 45 |
-| 100 | **100%** | 81.9% | 117 |
-| 250 | **100%** | 59.3% | 264 |
-| 400 | **100%** | 36.1% | 414 |
-| 800 | **100%** | 0.6% | 644 |
+| 60 | 100% | 93.1% | 45 |
+| 100 | 100% | 81.9% | 117 |
+| 250 | 100% | 59.3% | 264 |
+| 400 | 100% | 36.1% | 414 |
+| 800 | 100% | 0.6% | 644 |
 
-CRR = Critical Retention Rate. TRR = Token Reduction Rate (conversation-based).
-**CRR = 100% is a structural guarantee**, verified across budgets 59 to 5000 tokens.
+> **CRR = Critical Retention Rate. TRR = Token Reduction Rate (conversation-based).**
+> CRR = 100% is a structural guarantee, verified across budgets 59 to 5000 tokens.
+
+## Real-world verification
+
+### 96-turn healthcare dialogue on local Gemma (27B)
+
+> Tested by Piotr Chlebek (systems architect, patent holder in healthcare dialogue processing)
+> Setup: vLLM serving Gemma (27B), 8k context window
+> Result: CRR = 100%, ~6K raw tokens compressed to 1024 tokens
+
+All load-bearing medical facts preserved verbatim:
+- 1.7 kg weight gain (83.4 → 85.1 kg) flagged for nurse
+- Echocardiogram scheduled Wednesday 10:30, 40 min
+- Blood sugar 9.1 (Friday), 10.2 (Thursday)
+- Cataract surgery day procedure, requires accompaniment
+- Eye clinic requires cardiologist note
+- Diuretic causes nocturia, move to morning
+
+See `examples/gemma_healthcare/` for reproduction
+
+> First external verification of CRR = 100% on a non-Groq model.
 
 Offline benchmark (v0.1.17, 7 hand-authored 40-turn dialogues, same model for extraction and judging):
 
@@ -39,13 +56,11 @@ Offline benchmark (v0.1.17, 7 hand-authored 40-turn dialogues, same model for ex
 
 > **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
 
-**Savings depend on conversation length.** Short conversations compress very little. Recommended budget: 250–400 for best readability + compression balance.
+> Savings depend on conversation length. Short conversations compress very little. Recommended budget: 250–400 for best readability + compression balance.
 
-**Who it's for:** agents and chatbots whose long conversations must not lose a constraint, a decision, or a revised value (support bots, coding agents, assistants that remember a user's hard rules across sessions).
-
-**Who it's not for:** summarizing or answering questions over documents. See [Known Limitations](#known-limitations).
-
----
+> **Who it's for:** agents and chatbots whose long conversations must not lose a constraint, a decision, or a revised value (support bots, coding agents, assistants that remember a user's hard rules across sessions).
+>
+> **Who it's not for:** summarizing or answering questions over documents. See [Known Limitations](#known-limitations).
 
 ## Quickstart
 
@@ -68,7 +83,7 @@ print(mem.stats)
 
 Illustrative output (exact wording varies by extraction model):
 
-```
+```text
 [DEC] Webhook timeout updated to 10 seconds (was 30)
 [CON] Max fee 0.5%
 [DEC] Use POST /v1/items
@@ -86,9 +101,15 @@ llm = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 # Together AI
 llm = OpenAI(base_url="https://api.together.xyz/v1", api_key="...")
-```
 
----
+# Small-context local model (e.g., Gemma via vLLM with 2k-4k context)
+mem = DSPMMemory(
+    budget=250,
+    llm_client=llm,
+    model="gemma3:27b",
+    max_extraction_tokens=800,  # leave room for input prompt
+)
+```
 
 ## Why it's different
 
@@ -97,8 +118,6 @@ llm = OpenAI(base_url="https://api.together.xyz/v1", api_key="...")
 - **Memory persists across chats.** Save at the end of one chat, load at the start of the next, with no API cost for recall.
 - **Fixed budget, predictable cost.** You set the token budget; the rendered context stays inside it.
 - **Universal CRR guarantee.** CRR = 100% at any budget above the floor. Below the floor, raises `BudgetTooSmallError` instead of silently dropping criticals.
-
----
 
 ## Universal CRR guarantee
 
@@ -116,7 +135,7 @@ except BudgetTooSmallError as e:
     print(e)  # Budget 10 is below the absolute floor (59 tokens for 22 criticals)
 ```
 
-**5-stage compression ladder**, which escalates only as needed:
+5-stage compression ladder, which escalates only as needed:
 
 | Stage | When triggered | What it does |
 |-------|---------------|--------------|
@@ -125,8 +144,6 @@ except BudgetTooSmallError as e:
 | 3. Ultra-compact | Tight budget | Reduces each critical to key numbers only |
 | 4. Dense-merge | Very tight | Merges all criticals into one line |
 | 5. Ultra-dense | Extreme | Single line of space-separated tokens |
-
----
 
 ## Persistence: memory across chats and sessions
 
@@ -147,13 +164,11 @@ mem2.add_turn("user", "The deadline moved to November 5.")
 # → Oct 20 is superseded. November 5 replaces it.
 ```
 
-Persistence safety: writes are atomic, and `load(path, strict=True)` raises `CorruptNotebookError` on corrupt files.
-
----
+> **Persistence safety:** writes are atomic, and `load(path, strict=True)` raises `CorruptNotebookError` on corrupt files.
 
 ## How it works
 
-```
+```text
 Raw conversation (648 tokens, 24 turns)
         ↓
 Semantic extraction → 39 patches, 20 critical
@@ -163,9 +178,7 @@ Semantic extraction → 39 patches, 20 critical
 Compressed context (264 tokens @ budget 250) — 100% of criticals selected
 ```
 
-**Pipeline:** fingerprint dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection → adaptive budget allocation.
-
----
+Pipeline: fingerprint dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection → adaptive budget allocation.
 
 ## Patch types
 
@@ -178,9 +191,7 @@ Compressed context (264 tokens @ budget 250) — 100% of criticals selected
 | entity | `[ENT]` | No | Named things |
 | structure | `[STR]` | No | Schemas and workflows |
 
-Regulatory and compliance requirements (PCI-DSS, HIPAA, GDPR, SOC 2, ISO 27001, FedRAMP) are classified as constraints by the extractor prompt.
-
----
+> Regulatory and compliance requirements (PCI-DSS, HIPAA, GDPR, SOC 2, ISO 27001, FedRAMP) are classified as constraints by the extractor prompt.
 
 ## Stats and metrics
 
@@ -195,15 +206,13 @@ print(mem.stats)
 | `critical_total` | Constraint + decision patches (protected) |
 | `critical_selected` | Critical patches delivered in the last `get_context()` |
 | `crr` | Critical Retention Rate: % of extracted criticals delivered |
-| `trr_by_conversation` | Token Reduction Rate, conversation-based. **Use this for savings** |
+| `trr_by_conversation` | Token Reduction Rate, conversation-based. Use this for savings |
 | `budget` | Current token budget |
 | `conversation_tokens` | Raw turn text fed to `add_turn()` |
 | `patch_tokens` | Tokens in the extracted patches |
 | `context_tokens` | Tokens in the delivered context |
 | `llm_calls` | Total LLM calls made |
 | `llm_errors` | Total LLM errors |
-
----
 
 ## Testing
 
@@ -226,17 +235,16 @@ python tests/large_live_test_budgets.py   # 24-turn fintech + 3 revisions
 
 See `tests/README.md` for expected output and reproduction instructions.
 
----
-
 ## API reference
 
-### `DSPMMemory(budget, llm_client, model)`
+### `DSPMMemory(budget, llm_client, model, max_extraction_tokens)`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `budget` | int | 400 | Maximum tokens in the compressed output |
 | `llm_client` | OpenAI-compatible | None | Any sync OpenAI-compatible client |
 | `model` | str | `"gpt-4o-mini"` | Model used for patch extraction |
+| `max_extraction_tokens` | int | 2000 | Max output tokens for extractor LLM. Reduce for small-context local models (e.g., 800 for 2k-4k context models). Added in v0.2.2. |
 
 ### Methods
 
@@ -257,18 +265,16 @@ See `tests/README.md` for expected output and reproduction instructions.
 | `memory.critical_patches` | List of critical patches in memory |
 | `memory.all_patches` | List of every patch in memory |
 
-### Advanced API
+## Advanced API
 
 ```python
 from dspm import DSPMEngine, extract_patches, merge_into_memory, SemanticPatch
 from dspm.engine import BudgetTooSmallError
 ```
 
----
-
 ## Repository layout
 
-```
+```text
 .
 ├── dspm/
 │   ├── __init__.py      # public API
@@ -283,12 +289,12 @@ from dspm.engine import BudgetTooSmallError
 │   ├── small_live_test_budgets.py # 10-turn live test
 │   ├── large_live_test_budgets.py # 24-turn live test with 3 revisions
 │   └── README.md                  # reproduction instructions
+├── examples/
+│   └── gemma_healthcare/          # Piotr Chlebek contribution (96-turn test)
 ├── pyproject.toml
 ├── README.md
 └── LICENSE
 ```
-
----
 
 ## Known Limitations
 
@@ -296,11 +302,9 @@ from dspm.engine import BudgetTooSmallError
 - **Per-turn extraction cap.** The extraction prompt allows at most 1 constraint and 1 decision per turn. If a single message states several hard rules, split them across turns.
 - **Revision matching is rule-based.** Numeric, day-name and acronym-bridged revisions are handled. Other free-text revisions may coexist with stale values.
 - **Extraction depends on the LLM.** Quality varies by model and domain. A constraint the extractor misses is not protected.
-- **No async support yet.** `add_turn()` is synchronous. Planned for v0.3.0.
+- **No async support yet.** `add_turn()` is synchronous. Planned for v0.3.0 — driven by real-world feedback from Piotr Chlebek (vLLM batching use case).
 - **Document QA.** DSPM is designed for conversations, not document compression.
 - **Self-judged offline benchmark.** Same model family for extraction and judging; not independently replicated. Run live tests with your own data using `tests/large_live_test_budgets.py`.
-
----
 
 ## Paper
 
@@ -309,13 +313,9 @@ Dhruv Dubey, 2026 · Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/z
 
 > **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), jointly organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
 
----
-
 ## Feedback
 
 Found a case where a constraint or revision is lost? Open an issue with the conversation and the budget you used.
-
----
 
 ## License
 
