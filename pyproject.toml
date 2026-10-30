@@ -1,11 +1,11 @@
-[build-system]
+﻿[build-system]
 requires      = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name        = "dspm-memory"
 version     = "0.2.1"
-description = "Dynamic Semantic Patch Memory - token-budget compression for long-context LLM conversations with universal CRR=100% guarantee"
+description = "Dynamic Semantic Patch Memory — token-budget compression for long-context LLM conversations with universal CRR=100% guarantee"
 readme      = "README.md"
 license     = { text = "MIT" }
 authors     = [{ name = "Dhruv Dubey", email = "dhruvdubey1311@gmail.com" }]
@@ -43,5 +43,3 @@ Paper         = "https://doi.org/10.5281/zenodo.19438636"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dspm*"]
-
-
