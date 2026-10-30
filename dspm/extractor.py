@@ -114,6 +114,7 @@ def extract_patches(
     llm_client,
     recent_context: str = "",
     dialogue_name: str = "unknown",
+    max_tokens: int = MAX_EXTRACTION_TOKENS,
 ) -> List[SemanticPatch]:
     user_content = (
         f"RECENT CONTEXT:\n{recent_context}\n\n"
@@ -129,7 +130,7 @@ def extract_patches(
                     {"role": "user", "content": user_content},
                 ],
                 temperature=EXTRACTION_TEMPERATURE,
-                max_tokens=MAX_EXTRACTION_TOKENS,
+                max_tokens=max_tokens,
             )
         except FatalBackendError:
             raise

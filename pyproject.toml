@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name        = "dspm-memory"
-version     = "0.2.1"
+version     = "0.2.2"
 description = "Dynamic Semantic Patch Memory — token-budget compression for long-context LLM conversations with universal CRR=100% guarantee"
 readme      = "README.md"
 license     = { text = "MIT" }

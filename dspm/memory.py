@@ -32,10 +32,12 @@ class DSPMMemory:
         budget: int = 400,
         llm_client=None,
         model: str = "gpt-4o-mini",
+        max_extraction_tokens: int = 2000,
     ):
         self.budget      = budget
         self._llm_client = llm_client
         self._model      = model
+        self._max_extraction_tokens = max_extraction_tokens
         self._engine     = DSPMEngine(budget=budget)
         self._memory: List[SemanticPatch] = []
         self._turn_index = 0
@@ -77,6 +79,7 @@ class DSPMMemory:
             llm_client     = shim,
             recent_context = self._build_recent_context(),
             dialogue_name  = "dspm_memory",
+            max_tokens     = self._max_extraction_tokens,
         )
         self._llm_calls  += shim.n_calls - calls_before
         self._llm_errors += shim.n_errors
