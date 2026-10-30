@@ -1,1 +1,0 @@
-DSPM keeps the revision trail: 82.8% token reduction at a 250-token budget, with 100% of critical patches selected into context in the benchmark suite. The benchmark used 7 domains x 40 turns; the same model family extracted and judged, and the results have not been independently replicated.
