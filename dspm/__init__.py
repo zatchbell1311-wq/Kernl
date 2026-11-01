@@ -1,5 +1,5 @@
 """
-dspm — Dynamic Semantic Patch Memory
+dspm - Dynamic Semantic Patch Memory
 =====================================
 Token-budget compression for long-context LLM conversations.
 Achieves ~80%+ Token Reduction Rate with 100% Critical Retention Rate.
@@ -26,25 +26,19 @@ Quick start
     context_str        = engine.build_context(compressed_context[0])
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.3"
 __author__  = "Dhruv Dubey"
 
 from .patch     import SemanticPatch, count_tokens
-from .engine    import DSPMEngine
-from .extractor import extract_patches, merge_into_memory, ERROR_LOG
+from .engine    import DSPMEngine, PATCH_TYPES, CRITICAL_TYPES
+from .extractor import extract_patches, merge_into_memory, ExtractionError
 from .client    import LLMClient, FatalBackendError, make_client
 from .memory    import DSPMMemory, CorruptNotebookError
 
 __all__ = [
-    "DSPMMemory",
-    "CorruptNotebookError",
-    "DSPMEngine",
-    "extract_patches",
-    "merge_into_memory",
-    "SemanticPatch",
-    "count_tokens",
-    "ERROR_LOG",
-    "LLMClient",
-    "FatalBackendError",
-    "make_client",
+    "SemanticPatch", "count_tokens",
+    "DSPMEngine", "PATCH_TYPES", "CRITICAL_TYPES",
+    "extract_patches", "merge_into_memory", "ExtractionError",
+    "LLMClient", "make_client", "FatalBackendError",
+    "DSPMMemory", "CorruptNotebookError",
 ]

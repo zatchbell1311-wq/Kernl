@@ -1,12 +1,16 @@
-# dspm/memory.py — DSPMMemory high-level wrapper
+# dspm/memory.py - DSPMMemory high-level wrapper
 import json
+import logging
 import math
 import time
 from typing import List, Optional
 
 from .patch     import SemanticPatch, count_tokens
 from .engine    import DSPMEngine
-from .extractor import extract_patches, merge_into_memory, ERROR_LOG
+from .extractor import extract_patches, merge_into_memory, ExtractionError
+from .client    import FatalBackendError
+
+logger = logging.getLogger(__name__)
 
 
 class DSPMMemory:
@@ -43,6 +47,7 @@ class DSPMMemory:
         self._turn_index = 0
         self._last_selected: List[SemanticPatch] = []
         self._last_query   = ""
+        self._error_log: List[dict] = []
 
         # token counters
         self._conversation_tokens = 0
@@ -80,6 +85,7 @@ class DSPMMemory:
             recent_context = self._build_recent_context(),
             dialogue_name  = "dspm_memory",
             max_tokens     = self._max_extraction_tokens,
+            error_log      = self._error_log,
         )
         self._llm_calls  += shim.n_calls - calls_before
         self._llm_errors += shim.n_errors
@@ -208,6 +214,11 @@ class DSPMMemory:
         }
 
     @property
+    def error_log(self) -> list:
+        """Per-instance error log. Replaces the global ERROR_LOG."""
+        return self._error_log
+
+    @property
     def critical_patches(self) -> List[SemanticPatch]:
         """All critical patches currently in memory."""
         return [p for p in self._memory
@@ -242,31 +253,49 @@ class _LLMClientShim:
         self.n_calls  = 0
         self.n_errors = 0
 
-    def chat(self, max_retries: int = 5, **kwargs):
+    def chat(self, **kwargs):
+        """
+        Thin wrapper — one call, no retry.
+        - Auth errors (400/401/403/404) raise FatalBackendError immediately.
+        - Other errors (429/5xx/timeout/network) re-raise for extract_patches to retry.
+        - Empty content: double max_tokens once, retry once. If still empty, raise.
+        """
         kwargs["model"] = self._model
-        backoff = [1, 2, 5, 15, 30]
-        last_exc = None
-        for attempt in range(max_retries):
-            try:
-                self.n_calls += 1
-                resp = self._client.chat.completions.create(**kwargs)
-                content = (resp.choices[0].message.content or "").strip()
-                if not content:
-                    kwargs["max_tokens"] = int(
-                        kwargs.get("max_tokens", 256)
-                    ) * 2
-                    continue
-                return resp
-            except Exception as e:
-                last_exc = e
-                self.n_errors += 1
-                print(f"  DEBUG error attempt {attempt}: {type(e).__name__}: {str(e)[:200]}")
-                if attempt < max_retries - 1:
-                    time.sleep(backoff[min(attempt, 4)])
-        raise RuntimeError(
-            f"LLM backend failed after {max_retries} attempts"
-        ) from last_exc
+        self.n_calls += 1
 
+        try:
+            resp = self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            self.n_errors += 1
+            status = getattr(e, "status_code", None)
+            if status in (400, 401, 403, 404):
+                raise FatalBackendError(
+                    f"HTTP {status}: {str(e)[:200]}"
+                ) from e
+            # Transient error — re-raise for extract_patches to handle
+            raise
+
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            # Empty response — try once with doubled max_tokens
+            new_max = int(kwargs.get("max_tokens", 256)) * 2
+            kwargs["max_tokens"] = new_max
+            self.n_calls += 1
+            try:
+                resp = self._client.chat.completions.create(**kwargs)
+            except Exception as e:
+                self.n_errors += 1
+                status = getattr(e, "status_code", None)
+                if status in (400, 401, 403, 404):
+                    raise FatalBackendError(
+                        f"HTTP {status}: {str(e)[:200]}"
+                    ) from e
+                raise
+            content = (resp.choices[0].message.content or "").strip()
+            if not content:
+                raise RuntimeError("LLM returned empty content after max_tokens retry")
+
+        return resp
 
 def _patch_to_dict(p: SemanticPatch) -> dict:
     return {

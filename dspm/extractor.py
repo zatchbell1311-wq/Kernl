@@ -1,7 +1,8 @@
-# dspm/extractor.py — Patch extraction + memory merge (ported from DSPM v4.3 notebook)
+# dspm/extractor.py - Patch extraction + memory merge (v0.2.3)
 import re
 import json
 import time
+import logging
 from typing import List
 
 from .patch  import SemanticPatch
@@ -10,41 +11,47 @@ from .client import FatalBackendError
 
 EXTRACTION_TEMPERATURE  = 0.0
 MAX_EXTRACTION_TOKENS   = 2000
-API_SLEEP_BETWEEN_CALLS = 0  # v0.2.3: was 2s, now opt-in via set_api_sleep()
+API_SLEEP_BETWEEN_CALLS = 0  # v0.2.3: was 2s, now 0 by default
 EXTRACT_DEBUG           = False
 REVISION_OVERLAP        = 0.40
+
+
+class ExtractionError(RuntimeError):
+    """Raised when all extraction attempts fail. Caller must know the turn was dropped."""
+    pass
+
 
 EXTRACTION_SYSTEM_PROMPT = """You are a precision semantic extraction engine for long-context LLM memory management.
 Extract ONLY the load-bearing semantic units from the turn as a JSON array (max 5 items).
 
 Each object MUST have exactly these keys:
 "type" : one of [constraint, decision, code, equation, entity, structure]
-"payload" : 8-20 word note. ALWAYS include every number, version, threshold, percentage, unit and named tool VERBATIM — numeric values are NEVER dropped for brevity, even if the payload runs longer.
+"payload" : 8-20 word note. ALWAYS include every number, version, threshold, percentage, unit and named tool VERBATIM - numeric values are NEVER dropped for brevity, even if the payload runs longer.
 "dependencies" : list of patch_ids this patch logically depends on (can be empty)
 "patch_id" : unique string "p{turn}_{index}" using the CURRENT TURN INDEX given below
 
 Extraction rules:
-- constraints : hard requirements, limits, non-negotiable specs. Use SPARINGLY: max 1 per turn, and MERGE aggressively — across a long conversation keep the TOTAL constraints+decisions under ~20.
+- constraints : hard requirements, limits, non-negotiable specs. Use SPARINGLY: max 1 per turn, and MERGE aggressively - across a long conversation keep the TOTAL constraints+decisions under ~20.
 - decisions   : architecture-level choices and REVISIONS that supersede earlier values. Max 1 per turn.
 - code        : technology stack, libraries, APIs, implementation choices
 - equation    : formulas, thresholds, numerical specs (keep every operand and unit)
 - entity      : named systems, tools, organisations, acronyms
 - structure   : schemas, data formats, workflow steps, architectural patterns
 - MERGE related facts into ONE consolidated patch; never split a single requirement across patches
-- If a turn REVISES an earlier value, extract the NEW value as a decision/constraint — never extract both old and new
+- If a turn REVISES an earlier value, extract the NEW value as a decision/constraint - never extract both old and new
 
 OUTPUT FORMAT: raw JSON array only. No markdown fences, no reasoning, no commentary.
 If nothing is extractable, return []."""
 
 JSON_REMINDER = (
     "\n\nREMINDER: your previous reply was not a bare JSON array. "
-    "Respond NOW with ONLY the JSON array — no fences, no prose, no thinking out loud."
+    "Respond NOW with ONLY the JSON array - no fences, no prose, no thinking out loud."
 )
 
-ERROR_LOG: List[dict] = []
+logger = logging.getLogger(__name__)
 
 
-# ── JSON parsing helpers ──────────────────────────────────────────
+# -- JSON parsing helpers --
 def _strip_code_fences(text: str) -> str:
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
@@ -107,7 +114,7 @@ def _try_parse_array(raw):
     return None
 
 
-# ── main extractor ────────────────────────────────────────────────
+# -- main extractor --
 def extract_patches(
     turn_text: str,
     turn_index: int,
@@ -115,12 +122,16 @@ def extract_patches(
     recent_context: str = "",
     dialogue_name: str = "unknown",
     max_tokens: int = MAX_EXTRACTION_TOKENS,
+    error_log: list = None,
 ) -> List[SemanticPatch]:
+    if error_log is None:
+        error_log = []
     user_content = (
         f"RECENT CONTEXT:\n{recent_context}\n\n"
         f"CURRENT TURN INDEX: {turn_index} (use it in patch_id)\n"
         f"CURRENT TURN:\n{turn_text}"
     )
+    backoff = [1, 2, 5]
     for attempt in range(3):
         try:
             response = llm_client.chat(
@@ -135,15 +146,23 @@ def extract_patches(
         except FatalBackendError:
             raise
         except Exception as e:
-            ERROR_LOG.append({"dialogue": dialogue_name, "turn": turn_index,
-                               "error_type": "api_error", "message": str(e)[:300]})
-            time.sleep(2)
+            error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                              "error_type": "api_error", "message": str(e)[:300]})
+            logger.warning(f"extract_patches turn {turn_index} attempt {attempt} failed: {type(e).__name__}: {str(e)[:200]}")
+            if attempt < 2:
+                time.sleep(backoff[attempt])
             continue
 
         raw = (response.choices[0].message.content or "").strip()
+        if EXTRACT_DEBUG:
+            print(f"\n[EXTRACT_DEBUG] turn={turn_index} raw:\n{raw[:500]}\n")
         arr = _try_parse_array(raw)
         if arr is None:
-            time.sleep(1)
+            error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                              "error_type": "parse_failure", "message": "JSON parse failed"})
+            logger.warning(f"extract_patches turn {turn_index} attempt {attempt}: JSON parse failed")
+            if attempt < 2:
+                time.sleep(backoff[attempt])
             continue
 
         patches, seen_fp, skipped = [], set(), 0
@@ -152,12 +171,24 @@ def extract_patches(
                 skipped += 1; continue
             if not all(k in d for k in ("type", "payload", "patch_id")):
                 skipped += 1; continue
-            if d["type"] not in PATCH_TYPES:
+            norm_type = str(d["type"]).lower().rstrip("s")
+            type_map = {
+                "constraint": "constraint",
+                "constrain": "constraint",
+                "decision": "decision",
+                "code": "code",
+                "equation": "equation",
+                "entity": "entity",
+                "structure": "structure",
+            }
+            if norm_type not in type_map:
                 skipped += 1; continue
+            canonical_type = type_map[norm_type]
+
             candidate = SemanticPatch(
                 patch_id     = f"p{turn_index}_{len(patches)}",
                 turn_index   = turn_index,
-                patch_type   = d["type"],
+                patch_type   = canonical_type,
                 payload      = str(d["payload"])[:200],
                 dependencies = [str(dep) for dep in d.get("dependencies", [])
                                 if isinstance(dep, (str, int))],
@@ -168,16 +199,19 @@ def extract_patches(
             patches.append(candidate)
 
         if API_SLEEP_BETWEEN_CALLS > 0:
-         time.sleep(API_SLEEP_BETWEEN_CALLS)
+            time.sleep(API_SLEEP_BETWEEN_CALLS)
         return patches
 
-    ERROR_LOG.append({"dialogue": dialogue_name, "turn": turn_index,
-                       "error_type": "extraction_failure", "message": "All 3 attempts failed"})
-    return []
+    error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                      "error_type": "extraction_failure", "message": "All 3 attempts failed"})
+    logger.error(f"extract_patches turn {turn_index}: all 3 attempts failed")
+    raise ExtractionError(
+        f"Extraction failed for turn {turn_index} in dialogue '{dialogue_name}' after 3 attempts. "
+        f"Check mem.error_log for details. The turn's content was NOT stored."
+    )
 
 
 def merge_into_memory(memory: List[SemanticPatch], new_patches: List[SemanticPatch]) -> None:
-    """Merge new patches into the global memory list in-place."""
     CRITICAL_TYPES = {"constraint", "decision"}
     for p in new_patches:
         if any(m.fingerprint == p.fingerprint for m in memory):
