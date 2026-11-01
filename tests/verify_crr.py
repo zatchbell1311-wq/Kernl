@@ -1,4 +1,4 @@
-﻿import os, sys
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dspm import DSPMEngine, make_client, extract_patches, merge_into_memory

@@ -130,7 +130,7 @@ def _resolve_provider(provider: str):
 
 def _auto_pick_model(provider: str, client) -> str:
     from .engine import PATCH_TYPES  # avoid circular at module level
-    preferred = {"openrouter": ["stealth/ox-alpha"], "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]}
+    preferred = {"openrouter": ["meta-llama/llama-3.3-70b-instruct"], "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]}
     pref_list = preferred.get(provider, [])
     try:
         ids = [m.id for m in client.models.list().data]
