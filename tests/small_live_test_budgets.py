@@ -1,4 +1,4 @@
-﻿"""
+"""
 small_live_test_budgets.py -- LIVE test across multiple budgets.
 10-turn REST API conversation. Extracts patches ONCE via the LLM, then
 re-compresses at budgets [60, 100, 250, 400] (no extra LLM calls).

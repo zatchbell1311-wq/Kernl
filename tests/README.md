@@ -1,4 +1,4 @@
-﻿# DSPM Tests
+# DSPM Tests
 
 ## Setup
 ```bash

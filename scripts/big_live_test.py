@@ -1,4 +1,4 @@
-﻿"""big_live_test.py -- 24-turn fintech conversation test (uses GROQ_API_KEY env var)."""
+"""big_live_test.py -- 24-turn fintech conversation test (uses GROQ_API_KEY env var)."""
 import os
 from openai import OpenAI
 from dspm import DSPMMemory

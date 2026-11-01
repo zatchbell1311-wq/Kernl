@@ -1,4 +1,4 @@
-﻿"""
+"""
 test_v022_live.py -- verify v0.2.2 max_extraction_tokens parameter
 works on a real LLM (Groq gpt-oss-120b).
 

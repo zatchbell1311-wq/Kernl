@@ -6,3 +6,8 @@ build/
 *.egg-info/
 .env
 *.tmp
+.venv/
+venv/
+.idea/
+.vscode/
+*.log

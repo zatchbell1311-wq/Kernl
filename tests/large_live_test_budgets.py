@@ -1,4 +1,4 @@
-﻿"""
+"""
 large_live_test_budgets.py -- LIVE test at scale across multiple budgets.
 24-turn fintech conversation with 3 revisions (JWT 15->30min, S3 1h->15min,
 CPU 70%->60%). Extracts patches ONCE via the LLM, then re-compresses at
