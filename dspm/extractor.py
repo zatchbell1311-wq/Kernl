@@ -10,7 +10,7 @@ from .client import FatalBackendError
 
 EXTRACTION_TEMPERATURE  = 0.0
 MAX_EXTRACTION_TOKENS   = 2000
-API_SLEEP_BETWEEN_CALLS = 2
+API_SLEEP_BETWEEN_CALLS = 0  # v0.2.3: was 2s, now opt-in via set_api_sleep()
 EXTRACT_DEBUG           = False
 REVISION_OVERLAP        = 0.40
 
@@ -167,7 +167,8 @@ def extract_patches(
             seen_fp.add(candidate.fingerprint)
             patches.append(candidate)
 
-        time.sleep(API_SLEEP_BETWEEN_CALLS)
+        if API_SLEEP_BETWEEN_CALLS > 0:
+         time.sleep(API_SLEEP_BETWEEN_CALLS)
         return patches
 
     ERROR_LOG.append({"dialogue": dialogue_name, "turn": turn_index,
