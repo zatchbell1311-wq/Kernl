@@ -40,14 +40,17 @@ def _fingerprint(text: str) -> str:
 
 
 def _topic_keyword(text: str) -> str:
+    # v0.2.4: use head noun phrase with numbers stripped.
+    # Old code returned the first spaCy entity, which for numeric facts
+    # was the number itself (30, 10). So "30 seconds" and "10 seconds"
+    # landed in different slots and revisions never superseded.
     if _nlp is not None:
         doc = _nlp(text[:200])
-        for ent in doc.ents:
-            return ent.text.lower().replace(" ", "_")
-        nouns = [t.lemma_.lower() for t in doc
-                 if t.pos_ in {"NOUN", "PROPN"} and len(t.text) > 2]
-        if nouns:
-            return nouns[0]
+        # Find the first noun/proper noun that is NOT a number
+        for token in doc:
+            if token.pos_ in {"NOUN", "PROPN"} and not token.like_num and len(token.text) > 2:
+                return token.lemma_.lower()
+    # Fallback: first alphabetic word of length >= 3 (skip numbers)
     words = re.findall(r"[a-zA-Z]{3,}", text.lower())
     return words[0] if words else "topic"
 
