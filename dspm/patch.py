@@ -31,7 +31,12 @@ def count_tokens(text: str) -> int:
 
 
 def _fingerprint(text: str) -> str:
-    return hashlib.md5(" ".join(sorted(text.lower().split())).encode()).hexdigest()[:16]
+    # v0.2.4: use ORDERED normalized text, not sorted.
+    # Sorted (bag-of-words) made opposite-meaning rules collide:
+    #   "admins can delete, guests cannot" == "guests can delete, admins cannot"
+    # Ordered text preserves meaning.
+    normalized = " ".join(text.lower().split())
+    return hashlib.md5(normalized.encode()).hexdigest()[:16]
 
 
 def _topic_keyword(text: str) -> str:
