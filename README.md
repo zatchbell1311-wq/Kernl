@@ -31,7 +31,7 @@ CRR = Critical Retention Rate. TRR = Token Reduction Rate (conversation-based).
 
 **96-turn healthcare dialogue on local Gemma (27B)**
 
-- Tested by **Piotr Chlebek** (systems architect, patent holder in healthcare dialogue processing)
+- Tested by **[Piotr Chlebek](https://github.com/pcbua)** (systems architect, patent holder in healthcare dialogue processing)
 - Setup: vLLM serving Gemma (27B), 8k context window
 - Result: **CRR = 100%**, ~6K raw tokens compressed to 1024 tokens
 - All load-bearing medical facts preserved verbatim:
@@ -296,7 +296,7 @@ from dspm.engine import BudgetTooSmallError
 │   ├── large_live_test_budgets.py # 24-turn live test with 3 revisions
 │   └── README.md                  # reproduction instructions
 ├── examples/
-│   └── gemma_healthcare/          # Piotr Chlebek contribution (96-turn test)
+│   └── gemma_healthcare/          # Piotr Chlebek (github.com/pcbua) contribution (96-turn test)
 ├── pyproject.toml
 ├── README.md
 └── LICENSE
@@ -308,7 +308,7 @@ from dspm.engine import BudgetTooSmallError
 - **Per-turn extraction cap.** The extraction prompt allows at most 1 constraint and 1 decision per turn. If a single message states several hard rules, split them across turns.
 - **Revision matching is rule-based.** Numeric, day-name and acronym-bridged revisions are handled. Other free-text revisions may coexist with stale values.
 - **Extraction depends on the LLM.** Quality varies by model and domain. A constraint the extractor misses is not protected.
-- **No async support yet.** `add_turn()` is synchronous. Planned for v0.3.0 — driven by real-world feedback from Piotr Chlebek (vLLM batching use case).
+- **No async support yet.** `add_turn()` is synchronous. Planned for v0.3.0 — driven by real-world feedback from [Piotr Chlebek](https://github.com/pcbua) (vLLM batching use case).
 - **CRR measures patch count, not meaning.** At very tight budgets (e.g., 60 tokens), all critical patches are present but their payloads are compressed to bare numbers. A recall-based metric (Semantic Recall) is planned for v0.3.0 to measure actual fact recovery.
 - **Budget may exceed by a few tokens when all patches are criticals.** The v0.2.4 rendered-string trim only drops non-criticals. If criticals alone exceed the budget, `_fit_criticals` compresses payloads but may still be slightly over. Fix planned for v0.3.0.
 - **Document QA.** DSPM is designed for conversations, not document compression.
