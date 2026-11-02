@@ -219,7 +219,6 @@ print(mem.stats)
 Run offline tests (no API key needed):
 
 ```bash
-python tests/verify_crr.py
 python tests/test_universal_budgets.py
 ```
 
