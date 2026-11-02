@@ -1,5 +1,6 @@
 # DSPM — memory for LLM conversations that keeps your constraints
-**Dynamic Semantic Patch Memory**, by Dhruv Dubey · Python package: `dspm-memory` · Repo: Kernl
+
+Dynamic Semantic Patch Memory, by Dhruv Dubey · Python package: `dspm-memory` · Repo: [Kernl](https://github.com/zatchbell1311-wq/Kernl)
 
 [![PyPI version](https://img.shields.io/pypi/v/dspm-memory)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -17,34 +18,32 @@ Long chats drop the rule from turn 3 that everything else depends on. DSPM turns
 
 | Budget | CRR | TRR | Context tokens |
 |--------|-----|-----|----------------|
-| 60 | 100% | 93.1% | 45 |
-| 100 | 100% | 81.9% | 117 |
-| 250 | 100% | 59.3% | 264 |
-| 400 | 100% | 36.1% | 414 |
-| 800 | 100% | 0.6% | 644 |
+| 60 | **100%** | 92.3% | 50 |
+| 100 | **100%** | 89.4% | 69 |
+| 250 | **100%** | 59.0% | 266 |
+| 400 | **100%** | 36.4% | 412 |
+| 800 | **100%** | -2.0% | 661 |
 
-> **CRR = Critical Retention Rate. TRR = Token Reduction Rate (conversation-based).**
-> CRR = 100% is a structural guarantee, verified across budgets 59 to 5000 tokens.
+CRR = Critical Retention Rate. TRR = Token Reduction Rate (conversation-based).
+**CRR = 100% is a structural guarantee**, verified across budgets 59 to 5000 tokens.
 
 ## Real-world verification
 
-### 96-turn healthcare dialogue on local Gemma (27B)
+**96-turn healthcare dialogue on local Gemma (27B)**
 
-> Tested by Piotr Chlebek (systems architect, patent holder in healthcare dialogue processing)
-> Setup: vLLM serving Gemma (27B), 8k context window
-> Result: CRR = 100%, ~6K raw tokens compressed to 1024 tokens
+- Tested by **Piotr Chlebek** (systems architect, patent holder in healthcare dialogue processing)
+- Setup: vLLM serving Gemma (27B), 8k context window
+- Result: **CRR = 100%**, ~6K raw tokens compressed to 1024 tokens
+- All load-bearing medical facts preserved verbatim:
+  - 1.7 kg weight gain (83.4 → 85.1 kg) flagged for nurse
+  - Echocardiogram scheduled Wednesday 10:30, 40 min
+  - Blood sugar 9.1 (Friday), 10.2 (Thursday)
+  - Cataract surgery day procedure, requires accompaniment
+  - Eye clinic requires cardiologist note
+  - Diuretic causes nocturia, move to morning
+- See `examples/gemma_healthcare/` for reproduction
 
-All load-bearing medical facts preserved verbatim:
-- 1.7 kg weight gain (83.4 → 85.1 kg) flagged for nurse
-- Echocardiogram scheduled Wednesday 10:30, 40 min
-- Blood sugar 9.1 (Friday), 10.2 (Thursday)
-- Cataract surgery day procedure, requires accompaniment
-- Eye clinic requires cardiologist note
-- Diuretic causes nocturia, move to morning
-
-See `examples/gemma_healthcare/` for reproduction
-
-> First external verification of CRR = 100% on a non-Groq model.
+**First external verification of CRR = 100% on a non-Groq model.**
 
 Offline benchmark (v0.1.17, 7 hand-authored 40-turn dialogues, same model for extraction and judging):
 
@@ -54,13 +53,14 @@ Offline benchmark (v0.1.17, 7 hand-authored 40-turn dialogues, same model for ex
 | 250 | 82.8% | 100% |
 | 400 | 72.4% | 100% |
 
+> [!NOTE]
 > **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
 
-> Savings depend on conversation length. Short conversations compress very little. Recommended budget: 250–400 for best readability + compression balance.
+**Savings depend on conversation length.** Short conversations compress very little. Recommended budget: 250–400 for best readability + compression balance.
 
-> **Who it's for:** agents and chatbots whose long conversations must not lose a constraint, a decision, or a revised value (support bots, coding agents, assistants that remember a user's hard rules across sessions).
->
-> **Who it's not for:** summarizing or answering questions over documents. See [Known Limitations](#known-limitations).
+**Who it's for:** agents and chatbots whose long conversations must not lose a constraint, a decision, or a revised value (support bots, coding agents, assistants that remember a user's hard rules across sessions).
+
+**Who it's not for:** summarizing or answering questions over documents. See [Known Limitations](#known-limitations).
 
 ## Quickstart
 
@@ -90,7 +90,7 @@ Illustrative output (exact wording varies by extraction model):
 [CON] Always return JSON output.
 ```
 
-No paid key? Use a free Groq tier or a local Ollama model:
+### No paid key? Use a free Groq tier or a local Ollama model
 
 ```python
 # Groq (free tier available at console.groq.com)
@@ -118,6 +118,7 @@ mem = DSPMMemory(
 - **Memory persists across chats.** Save at the end of one chat, load at the start of the next, with no API cost for recall.
 - **Fixed budget, predictable cost.** You set the token budget; the rendered context stays inside it.
 - **Universal CRR guarantee.** CRR = 100% at any budget above the floor. Below the floor, raises `BudgetTooSmallError` instead of silently dropping criticals.
+- **Fail-loud extraction.** If the LLM backend fails, `add_turn()` raises `ExtractionError` instead of silently losing the message (v0.2.3+).
 
 ## Universal CRR guarantee
 
@@ -135,7 +136,9 @@ except BudgetTooSmallError as e:
     print(e)  # Budget 10 is below the absolute floor (59 tokens for 22 criticals)
 ```
 
-5-stage compression ladder, which escalates only as needed:
+### 5-stage compression ladder
+
+Escalates only as needed:
 
 | Stage | When triggered | What it does |
 |-------|---------------|--------------|
@@ -164,7 +167,7 @@ mem2.add_turn("user", "The deadline moved to November 5.")
 # → Oct 20 is superseded. November 5 replaces it.
 ```
 
-> **Persistence safety:** writes are atomic, and `load(path, strict=True)` raises `CorruptNotebookError` on corrupt files.
+Persistence safety: writes are atomic, and `load(path, strict=True)` raises `CorruptNotebookError` on corrupt files.
 
 ## How it works
 
@@ -178,7 +181,7 @@ Semantic extraction → 39 patches, 20 critical
 Compressed context (264 tokens @ budget 250) — 100% of criticals selected
 ```
 
-Pipeline: fingerprint dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection → adaptive budget allocation.
+**Pipeline:** fingerprint dedup → slot fusion → delta encoding → causal pruning → utility scoring → shadow selection → adaptive budget allocation.
 
 ## Patch types
 
@@ -191,7 +194,7 @@ Pipeline: fingerprint dedup → slot fusion → delta encoding → causal prunin
 | entity | `[ENT]` | No | Named things |
 | structure | `[STR]` | No | Schemas and workflows |
 
-> Regulatory and compliance requirements (PCI-DSS, HIPAA, GDPR, SOC 2, ISO 27001, FedRAMP) are classified as constraints by the extractor prompt.
+Regulatory and compliance requirements (PCI-DSS, HIPAA, GDPR, SOC 2, ISO 27001, FedRAMP) are classified as constraints by the extractor prompt.
 
 ## Stats and metrics
 
@@ -206,7 +209,7 @@ print(mem.stats)
 | `critical_total` | Constraint + decision patches (protected) |
 | `critical_selected` | Critical patches delivered in the last `get_context()` |
 | `crr` | Critical Retention Rate: % of extracted criticals delivered |
-| `trr_by_conversation` | Token Reduction Rate, conversation-based. Use this for savings |
+| `trr_by_conversation` | Token Reduction Rate, conversation-based. **Use this for savings** |
 | `budget` | Current token budget |
 | `conversation_tokens` | Raw turn text fed to `add_turn()` |
 | `patch_tokens` | Tokens in the extracted patches |
@@ -216,18 +219,20 @@ print(mem.stats)
 
 ## Testing
 
-Run offline tests (no API key needed):
+### Offline tests (no API key needed)
 
 ```bash
 python tests/test_universal_budgets.py
+python tests/test_regression.py       # v0.2.4: fingerprint + slot key regression tests
 ```
 
-Run live tests (API key required):
+### Live tests (API key required)
 
 ```bash
 # Windows PowerShell
 $env:GROQ_API_KEY = "gsk_..."
 
+python tests/verify_crr.py                # quick 10-turn CRR check
 python tests/small_live_test_budgets.py   # 10-turn REST API conversation
 python tests/large_live_test_budgets.py   # 24-turn fintech + 3 revisions
 ```
@@ -243,13 +248,13 @@ See `tests/README.md` for expected output and reproduction instructions.
 | `budget` | int | 400 | Maximum tokens in the compressed output |
 | `llm_client` | OpenAI-compatible | None | Any sync OpenAI-compatible client |
 | `model` | str | `"gpt-4o-mini"` | Model used for patch extraction |
-| `max_extraction_tokens` | int | 2000 | Max output tokens for extractor LLM. Reduce for small-context local models (e.g., 800 for 2k-4k context models). Added in v0.2.2 (configurable), default behavior solidified in v0.2.3. |
+| `max_extraction_tokens` | int | 2000 | Max output tokens for extractor LLM. **Reduce for small-context local models** (e.g., 800 for 2k-context models). Added in v0.2.2. |
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `add_turn(role, text)` | Add a conversation turn. Returns extracted patches. |
+| `add_turn(role, text)` | Add a conversation turn. Returns extracted patches. Raises `ExtractionError` on failure. |
 | `get_context(query="")` | Returns compressed context string. |
 | `set_budget(budget)` | Update the token budget. |
 | `save(path)` | Persist memory to JSON (atomic write). |
@@ -263,11 +268,12 @@ See `tests/README.md` for expected output and reproduction instructions.
 | `memory.stats` | Dict with token counts, patch counts, CRR, TRR and LLM telemetry |
 | `memory.critical_patches` | List of critical patches in memory |
 | `memory.all_patches` | List of every patch in memory |
+| `memory.error_log` | Per-instance list of extraction errors (v0.2.3+). Replaces global `ERROR_LOG`. |
 
-## Advanced API
+### Advanced API
 
 ```python
-from dspm import DSPMEngine, extract_patches, merge_into_memory, SemanticPatch
+from dspm import DSPMEngine, extract_patches, merge_into_memory, SemanticPatch, ExtractionError
 from dspm.engine import BudgetTooSmallError
 ```
 
@@ -285,6 +291,7 @@ from dspm.engine import BudgetTooSmallError
 ├── tests/
 │   ├── verify_crr.py              # quick CRR check
 │   ├── test_universal_budgets.py  # offline sweep, 17 budgets
+│   ├── test_regression.py         # v0.2.4 fingerprint + slot key tests
 │   ├── small_live_test_budgets.py # 10-turn live test
 │   ├── large_live_test_budgets.py # 24-turn live test with 3 revisions
 │   └── README.md                  # reproduction instructions
@@ -302,6 +309,8 @@ from dspm.engine import BudgetTooSmallError
 - **Revision matching is rule-based.** Numeric, day-name and acronym-bridged revisions are handled. Other free-text revisions may coexist with stale values.
 - **Extraction depends on the LLM.** Quality varies by model and domain. A constraint the extractor misses is not protected.
 - **No async support yet.** `add_turn()` is synchronous. Planned for v0.3.0 — driven by real-world feedback from Piotr Chlebek (vLLM batching use case).
+- **CRR measures patch count, not meaning.** At very tight budgets (e.g., 60 tokens), all critical patches are present but their payloads are compressed to bare numbers. A recall-based metric (Semantic Recall) is planned for v0.3.0 to measure actual fact recovery.
+- **Budget may exceed by a few tokens when all patches are criticals.** The v0.2.4 rendered-string trim only drops non-criticals. If criticals alone exceed the budget, `_fit_criticals` compresses payloads but may still be slightly over. Fix planned for v0.3.0.
 - **Document QA.** DSPM is designed for conversations, not document compression.
 - **Self-judged offline benchmark.** Same model family for extraction and judging; not independently replicated. Run live tests with your own data using `tests/large_live_test_budgets.py`.
 
@@ -310,6 +319,7 @@ from dspm.engine import BudgetTooSmallError
 **DSPM: A Critical-Retention Approach to Long-Context Memory Compression for LLM Conversations**
 Dhruv Dubey, 2026 · Zenodo: [10.5281/zenodo.19438636](https://doi.org/10.5281/zenodo.19438636)
 
+> [!NOTE]
 > **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), jointly organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
 
 ## Feedback
