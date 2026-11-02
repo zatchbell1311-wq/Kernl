@@ -316,6 +316,19 @@ class DSPMEngine:
                 break  # never drop a critical
             victim = min(nc, key=lambda q: q.utility)
             selected.remove(victim)
+
+        # v0.2.4: final trim based on ACTUAL rendered string token count.
+        # The sum of per-patch token_cost underestimates because build_context()
+        # adds newlines between patches. Trim non-criticals until rendered fits.
+        rendered = self.build_context(selected)
+        while len(selected) > 1 and count_tokens(rendered) > self.budget:
+            nc = [q for q in selected if q.patch_type not in CRITICAL_TYPES]
+            if not nc:
+                break  # never drop a critical
+            victim = min(nc, key=lambda q: q.utility)
+            selected.remove(victim)
+            rendered = self.build_context(selected)
+
         return selected, len(patches) - len(selected)
 
     # ── numeric-first trimmer ─────────────────────────────────────
