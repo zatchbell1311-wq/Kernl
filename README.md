@@ -11,7 +11,7 @@ pip install dspm-memory
 
 Long chats drop the rule from turn 3 that everything else depends on. DSPM turns each turn into typed patches, protects constraints, decisions and revised values, and renders them under a fixed token budget. Training-free: no fine-tuning, just prompts and Python rules. Works with any OpenAI-compatible endpoint.
 
-## Headline numbers (v0.2.2, verified on live data)
+## Headline numbers (v0.2.4, verified on live data)
 
 24-turn fintech conversation, 648 raw tokens, 3 revisions tracked (JWT 15→30min, S3 1h→15min, CPU 70%→60%), real Groq LLM:
 
@@ -84,7 +84,7 @@ print(mem.stats)
 Illustrative output (exact wording varies by extraction model):
 
 ```text
-[DEC] Webhook timeout updated to 10 seconds (was 30)
+[DEC] Webhook timeout updated to 10 seconds
 [CON] Max fee 0.5%
 [DEC] Use POST /v1/items
 [CON] Always return JSON output.
@@ -114,7 +114,7 @@ mem = DSPMMemory(
 ## Why it's different
 
 - **Constraints and decisions are protected.** `[CON]` and `[DEC]` patches are never dropped by dedup, fusion or pruning, and are selected first at render time.
-- **Revisions supersede old values.** Change a value mid-chat and the current one survives, with the lineage baked in as `(was X)`.
+- **Revisions supersede old values.** Change a value mid-chat and the current one survives; the old value is dropped from the active memory.
 - **Memory persists across chats.** Save at the end of one chat, load at the start of the next, with no API cost for recall.
 - **Fixed budget, predictable cost.** You set the token budget; the rendered context stays inside it.
 - **Universal CRR guarantee.** CRR = 100% at any budget above the floor. Below the floor, raises `BudgetTooSmallError` instead of silently dropping criticals.
@@ -244,7 +244,7 @@ See `tests/README.md` for expected output and reproduction instructions.
 | `budget` | int | 400 | Maximum tokens in the compressed output |
 | `llm_client` | OpenAI-compatible | None | Any sync OpenAI-compatible client |
 | `model` | str | `"gpt-4o-mini"` | Model used for patch extraction |
-| `max_extraction_tokens` | int | 2000 | Max output tokens for extractor LLM. Reduce for small-context local models (e.g., 800 for 2k-4k context models). Added in v0.2.2. |
+| `max_extraction_tokens` | int | 2000 | Max output tokens for extractor LLM. Reduce for small-context local models (e.g., 800 for 2k-4k context models). Added in v0.2.2 (configurable), default behavior solidified in v0.2.3. |
 
 ### Methods
 
