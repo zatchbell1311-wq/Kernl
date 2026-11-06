@@ -224,3 +224,101 @@ def merge_into_memory(memory: List[SemanticPatch], new_patches: List[SemanticPat
                 if len(nw & ow) / max(len(nw | ow), 1) >= REVISION_OVERLAP:
                     memory.remove(m)
         memory.append(p)
+
+
+
+# ── v0.3.0: Async extraction ─────────────────────────────────────
+async def async_extract_patches(
+    turn_text: str,
+    turn_index: int,
+    llm_client,
+    recent_context: str = "",
+    dialogue_name: str = "unknown",
+    max_tokens: int = MAX_EXTRACTION_TOKENS,
+    error_log: list = None,
+) -> List[SemanticPatch]:
+    """Async version of extract_patches. Expects llm_client.chat() to be a coroutine."""
+    import asyncio
+    if error_log is None:
+        error_log = []
+    
+    user_content = (
+        f"RECENT CONTEXT:\n{recent_context}\n\n"
+        f"CURRENT TURN INDEX: {turn_index} (use it in patch_id)\n"
+        f"CURRENT TURN:\n{turn_text}"
+    )
+    
+    backoff = [1, 2, 5]
+    for attempt in range(3):
+        try:
+            response = await llm_client.chat(
+                messages=[
+                    {"role": "system",
+                     "content": EXTRACTION_SYSTEM_PROMPT + ("" if attempt == 0 else JSON_REMINDER)},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=EXTRACTION_TEMPERATURE,
+                max_tokens=max_tokens,
+            )
+        except FatalBackendError:
+            raise
+        except Exception as e:
+            error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                              "error_type": "api_error", "message": str(e)[:300]})
+            logger.warning(f"async_extract turn {turn_index} attempt {attempt} failed: {type(e).__name__}: {str(e)[:200]}")
+            if attempt < 2:
+                await asyncio.sleep(backoff[attempt])
+            continue
+
+        raw = (response.choices[0].message.content or "").strip()
+        if EXTRACT_DEBUG:
+            print(f"\n[EXTRACT_DEBUG] turn={turn_index} raw:\n{raw[:500]}\n")
+        arr = _try_parse_array(raw)
+        if arr is None:
+            error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                              "error_type": "parse_failure", "message": "JSON parse failed"})
+            logger.warning(f"async_extract turn {turn_index} attempt {attempt}: JSON parse failed")
+            if attempt < 2:
+                await asyncio.sleep(backoff[attempt])
+            continue
+
+        patches, seen_fp, skipped = [], set(), 0
+        for d in arr:
+            if not isinstance(d, dict):
+                skipped += 1; continue
+            if not all(k in d for k in ("type", "payload", "patch_id")):
+                skipped += 1; continue
+            norm_type = str(d["type"]).lower().rstrip("s")
+            type_map = {
+                "constraint": "constraint", "constrain": "constraint",
+                "decision": "decision", "code": "code",
+                "equation": "equation", "entity": "entity", "structure": "structure",
+            }
+            if norm_type not in type_map:
+                skipped += 1; continue
+            canonical_type = type_map[norm_type]
+
+            candidate = SemanticPatch(
+                patch_id=f"p{turn_index}_{len(patches)}",
+                turn_index=turn_index,
+                patch_type=canonical_type,
+                payload=str(d["payload"])[:200],
+                dependencies=[str(dep) for dep in d.get("dependencies", [])
+                              if isinstance(dep, (str, int))],
+            )
+            if candidate.fingerprint in seen_fp:
+                skipped += 1; continue
+            seen_fp.add(candidate.fingerprint)
+            patches.append(candidate)
+
+        if API_SLEEP_BETWEEN_CALLS > 0:
+            await asyncio.sleep(API_SLEEP_BETWEEN_CALLS)
+        return patches
+
+    error_log.append({"dialogue": dialogue_name, "turn": turn_index,
+                      "error_type": "extraction_failure", "message": "All 3 attempts failed"})
+    logger.error(f"async_extract turn {turn_index}: all 3 attempts failed")
+    raise ExtractionError(
+        f"Async extraction failed for turn {turn_index} in dialogue '{dialogue_name}' after 3 attempts. "
+        f"Check mem.error_log for details. The turn's content was NOT stored."
+    )

@@ -35,6 +35,7 @@ from .extractor import extract_patches, merge_into_memory, ExtractionError
 from .client    import LLMClient, FatalBackendError, make_client
 from .memory    import DSPMMemory, CorruptNotebookError
 from .sr_budget import SRAwareBudgetSelector
+from .async_memory import AsyncDSPMMemory
 
 __all__ = [
     "SemanticPatch", "count_tokens",
