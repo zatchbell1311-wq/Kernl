@@ -4,7 +4,8 @@ Dynamic Semantic Patch Memory, by Dhruv Dubey Â· Python package: `dspm-memory` Â
 
 [![PyPI version](https://img.shields.io/pypi/v/dspm-memory)](https://pypi.org/project/dspm-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![CI](https://github.com/zatchbell1311-wq/Kernl/actions/workflows/tests.yml/badge.svg)](https://github.com/zatchbell1311-wq/Kernl/actions)
 
 ```bash
 pip install dspm-memory                  # lightweight (no torch)
