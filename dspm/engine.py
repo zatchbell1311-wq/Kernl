@@ -21,7 +21,6 @@ from collections import defaultdict, Counter
 from copy import deepcopy
 # sentence_transformers is imported lazily in _get_embedder() to keep
 # import-time lightweight and allow tests to inject a stub embedder.
-from sklearn.metrics.pairwise import cosine_similarity
 
 from .patch import SemanticPatch, count_tokens, _tag
 
@@ -294,6 +293,15 @@ class DSPMEngine:
         texts       = [query] + [p.payload for p in patches]
         embs        = _get_embedder().encode(texts, show_progress_bar=False)
         q_emb, p_embs = embs[0], embs[1:]
+        
+        # v0.3.0: Lazy import sklearn to avoid hard dependency
+        try:
+            from sklearn.metrics.pairwise import cosine_similarity
+        except ImportError:
+            # Fallback if scikit-learn not installed (pure python)
+            import numpy as np
+            def cosine_similarity(a, b):
+                return np.array([[np.dot(a[0], b[i]) / (np.linalg.norm(a[0]) * np.linalg.norm(b[i]) + 1e-9)] for i in range(len(b))])
         dep_counts  = Counter(dep for p in patches for dep in p.dependencies)
         max_dep     = max(dep_counts.values(), default=1)
         max_cost    = max(p.token_cost for p in patches) or 1
