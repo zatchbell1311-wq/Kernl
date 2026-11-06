@@ -55,12 +55,46 @@ _embedder = None  # lazy-loaded on first use
 def _get_embedder():
     global _embedder
     if _embedder is None:
-        import os
-        # v0.2.5: Force CPU to avoid CUDA OOM when sharing GPU with vLLM/Ollama
-        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-        from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer(EMBED_MODEL, device="cpu")
+        try:
+            import os
+            # v0.2.5: Force CPU to avoid CUDA OOM when sharing GPU with vLLM/Ollama
+            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+            from sentence_transformers import SentenceTransformer
+            _embedder = SentenceTransformer(EMBED_MODEL, device="cpu")
+        except ImportError:
+            # v0.3.0: Fallback to pure-Python hash-based embedder
+            # Install dspm-memory[embeddings] for semantic similarity
+            _embedder = _HashEmbedder()
     return _embedder
+
+
+class _HashEmbedder:
+    """Pure-Python fallback embedder. No torch/sentence-transformers required.
+    
+    Uses character-level hashing to create fixed-size vectors.
+    Less accurate than sentence-transformers but works for utility ranking.
+    Install dspm-memory[embeddings] for full semantic similarity.
+    """
+    
+    def __init__(self, dim=384):
+        self.dim = dim
+    
+    def encode(self, texts, show_progress_bar=False):
+        import numpy as np
+        import hashlib
+        
+        result = np.zeros((len(texts), self.dim), dtype=np.float32)
+        for i, text in enumerate(texts):
+            # Hash each word to a position in the vector
+            for word in text.lower().split():
+                h = int(hashlib.md5(word.encode()).hexdigest(), 16)
+                result[i][h % self.dim] += 1.0
+            # Normalize
+            norm = np.linalg.norm(result[i])
+            if norm > 0:
+                result[i] /= norm
+        
+        return result
 
 
 class BudgetTooSmallError(RuntimeError):
