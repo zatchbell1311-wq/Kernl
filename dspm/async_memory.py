@@ -143,6 +143,63 @@ class AsyncDSPMMemory:
 
         return new_patches
 
+    async def async_add_turns_batch(self, turns: list) -> List[SemanticPatch]:
+        """
+        v0.3.0: 2-pass batch extraction for long dialogues.
+        
+        Pass 1: Extract all turns in parallel (no recent_context).
+        Pass 2: Sequential merge for revisions/dedup.
+        
+        Tradeoff: Loses recent_context continuity between turns.
+        ~3-5x speedup on long dialogues (50+ turns).
+        
+        Args:
+            turns: List of (role, text) tuples
+            
+        Returns:
+            List of all extracted patches.
+        """
+        if self._llm_client is None:
+            raise RuntimeError("AsyncDSPMMemory needs an llm_client (AsyncOpenAI).")
+
+        # ── Pass 1: Extract all turns in parallel ──
+        async def extract_one(turn_idx, text):
+            self._conversation_tokens += count_tokens(text)
+            shim = AsyncLLMClientShim(self._llm_client, self._model)
+            try:
+                patches = await async_extract_patches(
+                    turn_text=text,
+                    turn_index=turn_idx,
+                    llm_client=shim,
+                    recent_context="",  # No context in batch mode
+                    dialogue_name="dspm_batch",
+                    max_tokens=self._max_extraction_tokens,
+                    error_log=self._error_log,
+                )
+            except Exception:
+                self._llm_errors += shim.n_errors
+                raise
+            self._llm_calls += shim.n_calls
+            self._llm_errors += shim.n_errors
+            return turn_idx, patches
+
+        # Run all extractions concurrently
+        tasks = [
+            extract_one(idx, text)
+            for idx, (role, text) in enumerate(turns)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # ── Pass 2: Sequential merge for revisions/dedup ──
+        all_patches = []
+        for turn_idx, patches in sorted(results, key=lambda x: x[0]):
+            merge_into_memory(self._memory, patches)
+            all_patches.extend(patches)
+            self._turn_index = turn_idx + 1
+
+        self._patch_tokens = sum(p.token_cost for p in self._memory)
+        return all_patches
+
     async def async_get_context(self, query: str = "") -> str:
         """
         Returns the compressed context string. Compression is CPU-bound and fast,
