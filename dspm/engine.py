@@ -117,13 +117,18 @@ class DSPMEngine:
         self._last_diag  = {}
 
     # ── public API ────────────────────────────────────────────────
-    def compress(self, patches, query: str, turn_index: int):
+    def compress(self, patches, query: str, turn_index: int, filter: dict = None):
         if not patches:
             return [], {}
         working = deepcopy(patches)          # never mutate caller's patches
         diag    = {}
         self._dense_mode = "off"
         self._update_ema(query)
+        
+        # v0.3.0: Apply structured filters (non-criticals only)
+        if filter is not None:
+            working = self._apply_filter(working, filter)
+            
         working, diag["t1_removed"] = self._fingerprint_dedup(working)
         working, diag["t2_removed"] = self._slot_fusion(working)
         working, diag["t3_deltas"]  = self._delta_encode(working)
@@ -441,6 +446,31 @@ class DSPMEngine:
         return words[0].rstrip(".,;:")
 
     # ── v4.5 universal tiered critical fit ───────────────────────
+    def _apply_filter(self, patches, filter_dict):
+        """v0.3.0: Filter non-critical patches before compression."""
+        type_filter = filter_dict.get("type")
+        turn_min = filter_dict.get("turn_index_min")
+        
+        kept = []
+        for p in patches:
+            if p.patch_type in CRITICAL_TYPES:
+                kept.append(p)
+                continue
+            
+            if type_filter is not None:
+                if isinstance(type_filter, (set, list, tuple)):
+                    if p.patch_type not in set(type_filter):
+                        continue
+                elif p.patch_type != type_filter:
+                    continue
+            
+            if turn_min is not None and p.turn_index < turn_min:
+                continue
+            
+            kept.append(p)
+        
+        return kept
+
     def _fit_criticals(self, selected):
         """Universal 5-stage compression. NEVER drops a critical.
 

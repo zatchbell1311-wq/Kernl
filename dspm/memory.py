@@ -123,7 +123,7 @@ class DSPMMemory:
 
         return new_patches
 
-    def get_context(self, query: str = "") -> str:
+    def get_context(self, query: str = "", filter: dict = None) -> str:
         """
         Returns the compressed context string under the token budget.
         Call this when you need to inject memory into an LLM prompt.
@@ -131,7 +131,7 @@ class DSPMMemory:
         self._last_query    = query
         self._engine.budget = self.budget
         selected, _         = self._engine.compress(
-            self._memory, query or "summarise", self._turn_index - 1
+            self._memory, query or "summarise", self._turn_index - 1, filter=filter
         )
         self._last_selected  = selected
         self._context_tokens = sum(p.token_cost for p in selected)
