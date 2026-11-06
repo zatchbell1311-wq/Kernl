@@ -33,16 +33,27 @@ class DSPMMemory:
 
     def __init__(
         self,
-        budget: int = 400,
+        budget = 400,
         llm_client=None,
         model: str = "gpt-4o-mini",
         max_extraction_tokens: int = 2000,
+        ctx_window: int = 8192,
+        response_reserve: int = 2000,
     ):
-        self.budget      = budget
+        # v0.2.5: AUTO budget mode
+        if budget == "auto":
+            from .engine import DSPMEngine as _Engine
+            # Estimate critical count from conversation length (rough heuristic)
+            # We will use 25% of available headroom as the target
+            upper = ctx_window - response_reserve - 500
+            # Floor is initially set low, will be enforced by engine on compress()
+            budget = max(100, int(upper * 0.25))
+            
+        self.budget      = int(budget)
         self._llm_client = llm_client
         self._model      = model
         self._max_extraction_tokens = max_extraction_tokens
-        self._engine     = DSPMEngine(budget=budget)
+        self._engine     = DSPMEngine(budget=self.budget)
         self._memory: List[SemanticPatch] = []
         self._turn_index = 0
         self._last_selected: List[SemanticPatch] = []

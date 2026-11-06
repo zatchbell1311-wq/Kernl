@@ -55,8 +55,11 @@ _embedder = None  # lazy-loaded on first use
 def _get_embedder():
     global _embedder
     if _embedder is None:
+        import os
+        # v0.2.5: Force CPU to avoid CUDA OOM when sharing GPU with vLLM/Ollama
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer(EMBED_MODEL)
+        _embedder = SentenceTransformer(EMBED_MODEL, device="cpu")
     return _embedder
 
 
