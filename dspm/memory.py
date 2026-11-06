@@ -8,6 +8,7 @@ from typing import List, Optional
 from .patch     import SemanticPatch, count_tokens
 from .engine    import DSPMEngine
 from .extractor import extract_patches, merge_into_memory, ExtractionError
+from .sr_budget import SRAwareBudgetSelector
 from .client    import FatalBackendError
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ class DSPMMemory:
         max_extraction_tokens: int = 2000,
         ctx_window: int = 8192,
         response_reserve: int = 2000,
+        target_sr: float = None,
+        sr_llm_client=None,
+        sr_model: str = None,
     ):
         # v0.2.5: AUTO budget mode
         if budget == "auto":
@@ -54,6 +58,18 @@ class DSPMMemory:
         self._model      = model
         self._max_extraction_tokens = max_extraction_tokens
         self._engine     = DSPMEngine(budget=self.budget)
+        self._ctx_window = ctx_window
+        self._response_reserve = response_reserve
+        self._target_sr = target_sr
+        self._sr_selector = None
+        if target_sr is not None:
+            sr_client = sr_llm_client if sr_llm_client is not None else llm_client
+            sr_mdl = sr_model if sr_model is not None else model
+            self._sr_selector = SRAwareBudgetSelector(
+                llm_client=sr_client,
+                model=sr_mdl,
+                target_sr=target_sr,
+            )
         self._memory: List[SemanticPatch] = []
         self._turn_index = 0
         self._last_selected: List[SemanticPatch] = []
@@ -185,6 +201,13 @@ class DSPMMemory:
             self._turn_index = data["turn_index"]
 
     # ── properties ────────────────────────────────────────────────
+
+    @property
+    def last_sr(self) -> float:
+        """Returns the last Semantic Recall score (if SR-aware mode is active)."""
+        if self._sr_selector is not None:
+            return self._sr_selector.last_sr
+        return 0.0
 
     @property
     def stats(self) -> dict:
