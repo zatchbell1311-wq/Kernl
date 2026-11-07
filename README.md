@@ -57,7 +57,7 @@ Offline benchmark (v0.1.17, 7 hand-authored 40-turn dialogues, same model for ex
 | 400 | 72.4% | 100% |
 
 > [!NOTE]
-> **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), organized by IISc Bengaluru and Argonne National Laboratory, funded by the U.S. Department of State.
+> **Recognition:** Poster accepted at CAICS 2026 (Indo-US Workshop on AI & Cybersecurity), organized by IISc Bengaluru backed by Argonne National Laboratory, funded by the U.S. Department of State.
 
 **Savings depend on conversation length.** Short conversations compress very little. Recommended budget: 250–400 for best readability + compression balance.
 
