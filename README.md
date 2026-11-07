@@ -329,3 +329,8 @@ Found a case where a constraint or revision is lost? Open an issue with the conv
 ## License
 
 MIT © 2026 Dhruv Dubey
+
+
+## Community Integrations
+
+- **[DialogKit](https://github.com/pcbua/DialogKit)** by Piotr Chlebek
