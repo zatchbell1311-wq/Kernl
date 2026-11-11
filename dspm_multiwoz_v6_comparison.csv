@@ -1,0 +1,5 @@
+method,n_dialogues,mean_raw_tokens,mean_compressed_tokens,mean_compression_ratio,mean_cpi,sr,sr_correct,sr_total,mean_time_s,budget,model,dspm_version
+dspm_compressed,10,161.2,108.8,1.586776287158834,0.71373,0.8421052631578947,16,19,42.314,400,qwen/qwen3.8-27b,0.5.3
+dspm_all_patches,10,161.2,115.8,1.4732055551380905,0.72801,0.8947368421052632,17,19,42.314,400,qwen/qwen3.8-27b,0.5.3
+last_k,10,161.2,161.2,1.0,0.73912,0.8947368421052632,17,19,0.0,400,qwen/qwen3.8-27b,0.5.3
+llm_summary,10,161.2,237.0,0.7071242713597463,0.72246,0.8421052631578947,16,19,0.982,400,qwen/qwen3.8-27b,0.5.3
