@@ -40,7 +40,7 @@ class DSPMMemory:
         ctx_window: int = 8192,
         response_reserve: int = 2000,
     ):
-        # v0.6.1: AUTO budget mode
+        # v0.6.2: AUTO budget mode
         self._auto_budget = (budget == "auto")
         self._ctx_window = ctx_window
         self._response_reserve = response_reserve
@@ -71,7 +71,7 @@ class DSPMMemory:
 
 
     def _calculate_auto_budget(self):
-        """v0.6.1: Calculate optimal budget from ctx_window and critical count."""
+        """v0.6.2: Calculate optimal budget from ctx_window and critical count."""
         from .engine import DSPMEngine
         n_crit = sum(1 for p in self._memory
                      if p.patch_type in {"constraint", "decision"})
@@ -122,7 +122,7 @@ class DSPMMemory:
         Call this when you need to inject memory into an LLM prompt.
         """
         self._last_query    = query
-        # v0.6.1: recalculate budget if auto mode
+        # v0.6.2: recalculate budget if auto mode
         if self._auto_budget:
             self.budget = self._calculate_auto_budget()
         self._engine.budget = self.budget
@@ -156,7 +156,7 @@ class DSPMMemory:
     def save(self, path: str) -> None:
         """Save memory to a JSON file."""
         data = {
-            "version"    : "0.6.1",
+            "version"    : "0.6.2",
             "budget"     : self.budget,
             "turn_index" : self._turn_index,
             "patches"    : [_patch_to_dict(p) for p in self._memory],

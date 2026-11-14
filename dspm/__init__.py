@@ -26,7 +26,7 @@ Quick start
     context_str        = engine.build_context(compressed_context[0])
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 __author__  = "Dhruv Dubey"
 
 from .patch     import SemanticPatch, count_tokens
