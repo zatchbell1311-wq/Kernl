@@ -18,7 +18,7 @@ EXTRACTION_TEMPERATURE  = 0.0
 MAX_EXTRACTION_TOKENS   = 2000
 API_SLEEP_BETWEEN_CALLS = 0  # v0.2.3: was 2s, now 0 by default
 EXTRACT_DEBUG           = False
-REVISION_OVERLAP        = 0.40
+REVISION_OVERLAP = 0.60
 
 EXTRACTION_SYSTEM_PROMPT = """You are a precision semantic extraction engine for long-context LLM memory management.
 Extract load-bearing semantic units from the turn as a JSON array (max 15 items).
@@ -255,6 +255,13 @@ def merge_into_memory(memory: List[SemanticPatch], new_patches: List[SemanticPat
             for m in [q for q in memory
                       if q.patch_type in CRITICAL_TYPES and q.slot_key == p.slot_key]:
                 ow = set(m.payload.lower().split())
-                if len(nw & ow) / max(len(nw | ow), 1) >= REVISION_OVERLAP:
+                overlap = len(nw & ow) / max(len(nw | ow), 1)
+                if overlap >= REVISION_OVERLAP:
+                    # v0.6.1: Don't merge if both have different numbers (Baidik #5)
+                    import re as _re
+                    p_nums = set(_re.findall(r'\d+[.%a-z]*', p.payload.lower()))
+                    m_nums = set(_re.findall(r'\d+[.%a-z]*', m.payload.lower()))
+                    if p_nums and m_nums and p_nums != m_nums:
+                        continue  # Different numbers = different rules
                     memory.remove(m)
         memory.append(p)

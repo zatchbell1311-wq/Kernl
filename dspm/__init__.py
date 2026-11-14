@@ -26,7 +26,7 @@ Quick start
     context_str        = engine.build_context(compressed_context[0])
 """
 
-__version__ = "0.5.3"
+__version__ = "0.6.1"
 __author__  = "Dhruv Dubey"
 
 from .patch     import SemanticPatch, count_tokens
@@ -34,6 +34,7 @@ from .engine    import DSPMEngine
 from .extractor import extract_patches, merge_into_memory, ExtractionError
 from .client    import LLMClient, FatalBackendError, make_client
 from .memory    import DSPMMemory, CorruptNotebookError
+from .async_memory import AsyncDSPMMemory
 
 __all__ = [
     "SemanticPatch", "count_tokens",
@@ -41,5 +42,6 @@ __all__ = [
     "extract_patches", "merge_into_memory",
     "LLMClient", "make_client", "FatalBackendError",
     "DSPMMemory",
+    "AsyncDSPMMemory",
     "ExtractionError",
 ]

@@ -33,11 +33,19 @@ class DSPMMemory:
 
     def __init__(
         self,
-        budget: int = 400,
+        budget=400,
         llm_client=None,
         model: str = "gpt-4o-mini",
         max_extraction_tokens: int = 2000,
+        ctx_window: int = 8192,
+        response_reserve: int = 2000,
     ):
+        # v0.6.1: AUTO budget mode
+        self._auto_budget = (budget == "auto")
+        self._ctx_window = ctx_window
+        self._response_reserve = response_reserve
+        if self._auto_budget:
+            budget = 400  # start with default, will adjust after extraction
         self.budget      = budget
         self._llm_client = llm_client
         self._model      = model
@@ -48,6 +56,7 @@ class DSPMMemory:
         self._last_selected: List[SemanticPatch] = []
         self._last_query   = ""
         self._error_log: List[dict] = []
+        self._deleted_patches: List[SemanticPatch] = []
 
         # token counters
         self._conversation_tokens = 0
@@ -59,6 +68,18 @@ class DSPMMemory:
         self._llm_errors  = 0
 
     # ── core methods ──────────────────────────────────────────────
+
+
+    def _calculate_auto_budget(self):
+        """v0.6.1: Calculate optimal budget from ctx_window and critical count."""
+        from .engine import DSPMEngine
+        n_crit = sum(1 for p in self._memory
+                     if p.patch_type in {"constraint", "decision"})
+        upper = self._ctx_window - self._response_reserve - 500
+        floor = DSPMEngine.min_budget_for_crr(max(n_crit, 1))
+        # Target: 5% of available context, but at least the floor
+        target = max(floor, min(int(upper * 0.05), 500))
+        return target
 
     def add_turn(self, role: str, text: str) -> List[SemanticPatch]:
         """
@@ -101,6 +122,9 @@ class DSPMMemory:
         Call this when you need to inject memory into an LLM prompt.
         """
         self._last_query    = query
+        # v0.6.1: recalculate budget if auto mode
+        if self._auto_budget:
+            self.budget = self._calculate_auto_budget()
         self._engine.budget = self.budget
         selected, _         = self._engine.compress(
             self._memory, query or "summarise", self._turn_index - 1
@@ -132,7 +156,7 @@ class DSPMMemory:
     def save(self, path: str) -> None:
         """Save memory to a JSON file."""
         data = {
-            "version"    : "0.5.3",
+            "version"    : "0.6.1",
             "budget"     : self.budget,
             "turn_index" : self._turn_index,
             "patches"    : [_patch_to_dict(p) for p in self._memory],
@@ -184,11 +208,14 @@ class DSPMMemory:
                                 if p.patch_type in {"constraint", "decision"})
         critical_selected = sum(1 for p in self._last_selected
                                 if p.patch_type in {"constraint", "decision"})
+        critical_deleted = sum(1 for p in getattr(self, '_deleted_patches', [])
+                               if p.patch_type in {"constraint", "decision"})
 
         crr = 100.0
         if self._last_selected:
-            crr = (critical_selected / critical_total * 100
-                   if critical_total > 0 else 0.0)
+            denom = critical_total + critical_deleted
+            crr = (critical_selected / denom * 100
+                   if denom > 0 else 0.0)
 
         trr_by_conversation = 0.0
         if self._conversation_tokens > 0:
@@ -201,6 +228,7 @@ class DSPMMemory:
             "total_patches"        : len(self._memory),
             "critical_total"       : critical_total,
             "critical_selected"    : critical_selected,
+            "critical_deleted"     : critical_deleted,
             "crr"                  : round(crr, 1),
             "trr_by_conversation"  : trr_by_conversation,
             "budget"               : self.budget,

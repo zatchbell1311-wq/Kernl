@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name        = "dspm-memory"
-version     = "0.5.3"
+version     = "0.6.1"
 description = "Dynamic Semantic Patch Memory — token-budget compression for long-context LLM conversations with universal CPI=100% guarantee"
 readme      = "README.md"
 license     = { text = "MIT" }
@@ -25,14 +25,26 @@ classifiers = [
 requires-python = ">=3.9"
 dependencies = [
     "openai>=1.0.0",
-    "groq>=0.4.0",
+    "tiktoken>=0.5.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+embeddings = [
     "sentence-transformers>=2.2.0",
     "scikit-learn>=1.0.0",
-    "tiktoken>=0.5.0",
-    "spacy>=3.5.0",
-    "numpy>=1.24.0",
     "scipy>=1.10.0",
 ]
+nlp = ["spacy>=3.5.0"]
+groq = ["groq>=0.4.0"]
+full = [
+    "sentence-transformers>=2.2.0",
+    "scikit-learn>=1.0.0",
+    "scipy>=1.10.0",
+    "spacy>=3.5.0",
+    "groq>=0.4.0",
+]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
 [project.urls]
 Homepage      = "https://dspm-nine.vercel.app"

@@ -2,7 +2,6 @@
 import re
 import hashlib
 import tiktoken
-import spacy
 from dataclasses import dataclass, field
 from typing import List
 
@@ -21,10 +20,22 @@ SHORT_TAGS = {
 
 _enc = tiktoken.get_encoding(TOKENIZER_NAME)
 
-try:
-    _nlp = spacy.load("en_core_web_sm")
-except OSError:
-    _nlp = None
+# v0.6.0: spacy imported lazily for lightweight install
+_spacy_loaded = False
+_nlp = None
+
+def _load_spacy():
+    """Load spacy model lazily. Returns None if not available."""
+    global _nlp, _spacy_loaded
+    if not _spacy_loaded:
+        _spacy_loaded = True
+        try:
+            import spacy
+            _nlp = spacy.load("en_core_web_sm")
+        except Exception:
+            _nlp = None
+    return _nlp
+
 
 
 def count_tokens(text: str) -> int:
@@ -41,18 +52,55 @@ def _fingerprint(text: str) -> str:
     return hashlib.md5(normalized.encode()).hexdigest()[:16]
 
 
+
+# v0.6.1: Common words skipped in topic keyword fallback
+_COMMON_WORDS = {
+    "max", "maximum", "min", "minimum", "must", "mustnt",
+    "the", "all", "always", "never", "not", "no", "non",
+    "use", "using", "set", "add", "update", "change",
+    "is", "are", "was", "were", "be", "been",
+    "for", "per", "each", "every", "any",
+    "and", "or", "but", "if", "when", "then",
+    "a", "an", "in", "on", "at", "to", "of", "by",
+    "do", "does", "did", "done",
+    "this", "that", "these", "those",
+    "it", "its", "they", "them", "their",
+    "will", "would", "should", "could", "can",
+    "has", "have", "had",
+}
+
 def _topic_keyword(text: str) -> str:
-    if _nlp is not None:
-        doc = _nlp(text[:200])
+    """Extract a distinguishing topic keyword from text.
+    v0.6.1: Skips common words, includes numeric values.
+    Fixes Baidik #5: different rules get different slot_keys.
+    """
+    nlp = _load_spacy()
+    if nlp is not None:
+        doc = nlp(text[:200])
+        # v0.6.1: Check entities first, but skip common words
         for ent in doc.ents:
-            return ent.text.lower().replace(" ", "_")
+            ent_text = ent.text.lower().replace(" ", "_")
+            if ent_text not in _COMMON_WORDS:
+                return ent_text
+        # v0.6.1: Collect ALL nouns, return first that's NOT common
         nouns = [t.lemma_.lower() for t in doc
                  if t.pos_ in {"NOUN", "PROPN"} and len(t.text) > 2]
-        if nouns:
+        meaningful_nouns = [n for n in nouns if n not in _COMMON_WORDS]
+        if meaningful_nouns:
+            return meaningful_nouns[0]
+        elif nouns:
             return nouns[0]
-    words = re.findall(r"[a-zA-Z]{3,}", text.lower())
-    return words[0] if words else "topic"
 
+    # v0.6.1: Better fallback — skip common words, include numbers
+    words = re.findall(r"[a-zA-Z]{3,}", text.lower())
+    meaningful = [w for w in words if w not in _COMMON_WORDS]
+    numbers = re.findall(r"\d+[.%a-z]*", text.lower())
+    if numbers:
+        key_word = meaningful[0] if meaningful else "rule"
+        return key_word + "_" + numbers[0]
+    if meaningful:
+        return meaningful[0]
+    return words[0] if words else "topic"
 
 def _tag(ptype: str) -> str:
     return SHORT_TAGS.get(ptype, ptype[:3].upper())

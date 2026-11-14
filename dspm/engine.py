@@ -21,7 +21,11 @@ from collections import defaultdict, Counter
 from copy import deepcopy
 # sentence_transformers is imported lazily in _get_embedder() to keep
 # import-time lightweight and allow tests to inject a stub embedder.
-from sklearn.metrics.pairwise import cosine_similarity
+# v0.6.0: sklearn imported lazily for lightweight install
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+except ImportError:
+    cosine_similarity = None  # fallback uses numpy
 
 from .patch import SemanticPatch, count_tokens, _tag
 
@@ -53,11 +57,39 @@ TAG_OVERHEAD_TOKENS = 4
 _embedder = None  # lazy-loaded on first use
 
 
+class _HashEmbedder:
+    """Pure-Python fallback embedder when sentence-transformers is not installed.
+    Uses hashing-based bag-of-words embeddings. No torch, no GPU, ~1ms per text.
+    Quality is lower than MiniLM but sufficient for utility scoring.
+    """
+    def __init__(self, dim=384):
+        self.dim = dim
+
+    def encode(self, texts, show_progress_bar=False):
+        import numpy as np
+        results = []
+        for text in texts:
+            vec = np.zeros(self.dim, dtype=np.float32)
+            for word in text.lower().split():
+                h = hash(word) % self.dim
+                vec[h] += 1.0
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec /= norm
+            results.append(vec)
+        return np.array(results)
+
+
 def _get_embedder():
     global _embedder
     if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer(EMBED_MODEL)
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedder = SentenceTransformer(EMBED_MODEL)
+        except ImportError:
+            # v0.6.0: pure-Python fallback, no torch needed
+            import numpy as np
+            _embedder = _HashEmbedder(dim=384)
     return _embedder
 
 
@@ -522,3 +554,23 @@ class DSPMEngine:
                 words.append(f"[{tag}]")
                 words.extend(p.payload for p in grp)
         return " ".join(words)
+
+
+# v0.6.0: numpy fallback for cosine_similarity when sklearn not installed
+def _cosine_fallback(a, b):
+    """Pure numpy cosine similarity. Used when sklearn is not available."""
+    import numpy as np
+    if isinstance(a, list):
+        a = np.array(a)
+    if isinstance(b, list):
+        b = np.array(b)
+    dot = np.dot(a.flatten(), b.flatten())
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return np.array([[0.0]])
+    return np.array([[dot / (na * nb)]])
+
+# Patch cosine_similarity if sklearn not available
+if cosine_similarity is None:
+    cosine_similarity = _cosine_fallback
