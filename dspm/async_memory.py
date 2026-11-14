@@ -137,7 +137,7 @@ class AsyncDSPMMemory(DSPMMemory):
                     candidate = SemanticPatch(
                         patch_id=f"p{turn_index}_{len(patches)}",
                         turn_index=turn_index,
-                        patch_type=tm[norm_type],
+                        patch_type=TYPE_MAP[norm_type],
                         payload=str(d["payload"])[:200],
                         dependencies=[str(dep) for dep in d.get("dependencies", [])
                                       if isinstance(dep, (str, int))],
