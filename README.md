@@ -103,7 +103,7 @@ print(mem.stats)
 
 Illustrative output (exact wording varies by extraction model):
 
-```
+```text
 [DEC] Webhook timeout updated to 10 seconds
 [CON] Max fee 0.5%
 [DEC] Use POST /v1/items
@@ -238,7 +238,7 @@ mem2.add_turn("user", "The deadline moved to November 5.")
 
 ## How it works
 
-```
+```text
 Raw conversation (446 tokens, 24 turns)
         ↓
 Two-tier semantic extraction → 29 patches, 9 critical
@@ -343,7 +343,7 @@ from dspm.engine import BudgetTooSmallError
 
 ## Repository layout
 
-```
+```text
 .
 ├── dspm/
 │   ├── __init__.py      # public API (v0.5.3)
