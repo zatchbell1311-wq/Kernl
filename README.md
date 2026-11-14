@@ -20,7 +20,7 @@ Long chats drop the rule from turn 3 that everything else depends on. DSPM turns
 
 ---
 
-## What's new in v0.5.3
+## What's new in v0.6.2
 
 - `[SLOT]` patch type for slot-value pairs (`restaurant.area = centre`, `train.arriveBy = 21:15`)
 - Two-tier extraction: `[CON]`/`[DEC]` are critical (max 1 per turn, merge aggressively), `[SLOT]` is non-critical but gets 30% budget allocation
@@ -30,7 +30,7 @@ Long chats drop the rule from turn 3 that everything else depends on. DSPM turns
 
 ---
 
-## Benchmark results (v0.5.3)
+## Benchmark results (v0.6.2)
 
 ### MultiWOZ 2.2 — Multi-turn task-oriented dialogue
 
@@ -38,8 +38,8 @@ Long chats drop the rule from turn 3 that everything else depends on. DSPM turns
 
 | Method | SR | CPI | Tokens used | Compression |
 |---|---|---|---|---|
-| DSPM v0.5.3 (all_patches) | 89.5% | 0.73 | 116 | 1.6× |
-| DSPM v0.5.3 (compressed) | 84.2% | 0.71 | 109 | 1.6× |
+| DSPM v0.6.2 (all_patches) | 89.5% | 0.73 | 116 | 1.6× |
+| DSPM v0.6.2 (compressed) | 84.2% | 0.71 | 109 | 1.6× |
 | last-k turns (baseline) | 89.5% | 0.74 | 161 | 1.0× |
 | LLM summary (baseline) | 84.2% | 0.72 | 237 | 0.7× |
 
@@ -176,7 +176,7 @@ Escalates only as needed:
 
 ---
 
-## Two-tier extraction (v0.5.3)
+## Two-tier extraction (v0.6.2)
 
 The extraction prompt uses a two-tier system:
 
@@ -346,7 +346,7 @@ from dspm.engine import BudgetTooSmallError
 ```text
 .
 ├── dspm/
-│   ├── __init__.py      # public API (v0.5.3)
+│   ├── __init__.py      # public API (v0.6.2)
 │   ├── patch.py         # SemanticPatch structure + SHORT_TAGS (7 types)
 │   ├── engine.py        # DSPMEngine — 7-stage pipeline + CRR guarantee
 │   ├── extractor.py     # Two-tier LLM-based patch extraction
